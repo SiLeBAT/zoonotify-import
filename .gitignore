@@ -1,3 +1,10 @@
+# AI
+CLAUDE.md
+.claude/
+
+# misc
+local/
+
 # Logs
 logs
 *.log
