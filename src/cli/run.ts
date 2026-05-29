@@ -1,12 +1,10 @@
 import { access } from 'node:fs/promises';
-import type { LocalizedRow } from '../core/domain.js';
+import type { CollectionImport } from '../core/orchestrator.js';
 import type { StrapiClient } from '../core/strapi-client.js';
-import { parseMicroorganismSheet } from '../core/parser.js';
-import { syncCollection } from '../core/orchestrator.js';
+import { parseAllReferences } from '../core/parser.js';
+import { syncReferences } from '../core/orchestrator.js';
 import { HttpStrapiClient } from '../adapters/http-strapi-client.js';
 import { logger } from './logger.js';
-
-const COLLECTION = 'microorganism';
 
 export interface CliEnv {
   STRAPI_URL?: string;
@@ -16,7 +14,7 @@ export interface CliEnv {
 /** Side-effecting collaborators, injected so the control flow is unit-testable. */
 export interface CliDeps {
   fileExists: (path: string) => Promise<boolean>;
-  parse: (path: string) => Promise<LocalizedRow[]>;
+  parseReferences: (path: string) => Promise<CollectionImport[]>;
   makeClient: (baseUrl: string, token: string) => StrapiClient;
   log: (message: string) => void;
   error: (message: string) => void;
@@ -31,16 +29,17 @@ export const defaultDeps: CliDeps = {
       return false;
     }
   },
-  parse: parseMicroorganismSheet,
+  parseReferences: parseAllReferences,
   makeClient: (baseUrl, token) => new HttpStrapiClient(baseUrl, token),
   log: (message) => logger.info(message),
   error: (message) => logger.error(message),
 };
 
 /**
- * Validates inputs, then runs the walking-skeleton import for `microorganism`.
- * Returns the process exit code: 0 on success, 1 on invalid args / missing env
- * / missing workbook file.
+ * Validates inputs, then imports the full reference layer: truncate every
+ * reference collection, then bulk-create every reference collection. Returns the
+ * process exit code: 0 on success, 1 on invalid args / missing env / missing
+ * workbook file.
  */
 export async function runImport(
   workbookPath: string | undefined,
@@ -60,11 +59,15 @@ export async function runImport(
     return 1;
   }
 
-  const rows = await deps.parse(workbookPath);
+  const imports = await deps.parseReferences(workbookPath);
   const client = deps.makeClient(env.STRAPI_URL, env.STRAPI_TOKEN);
-  const report = await syncCollection(client, COLLECTION, rows);
-  deps.log(
-    `Imported ${COLLECTION}: deleted en=${report.deleted.en} de=${report.deleted.de}, created ${report.created}.`,
-  );
+  const { collections, relations } = await syncReferences(client, imports);
+
+  for (const report of collections) {
+    deps.log(
+      `Imported ${report.collection}: deleted en=${report.deleted.en} de=${report.deleted.de}, created ${report.created}.`,
+    );
+  }
+  deps.log(`Done: ${collections.length} reference collections, ${relations.size} relation keys.`);
   return 0;
 }

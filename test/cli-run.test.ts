@@ -6,12 +6,12 @@ import type { LocalizedRow } from '../src/core/domain.js';
 
 class RecordingClient implements StrapiClient {
   calls: string[] = [];
-  async truncate(): Promise<TruncateResult> {
-    this.calls.push('truncate');
+  async truncate(collection: string): Promise<TruncateResult> {
+    this.calls.push(`truncate:${collection}`);
     return { en: 0, de: 0 };
   }
-  async bulkCreate(_c: string, rows: LocalizedRow[]): Promise<BulkCreateResult[]> {
-    this.calls.push('bulkCreate');
+  async bulkCreate(collection: string, rows: LocalizedRow[]): Promise<BulkCreateResult[]> {
+    this.calls.push(`bulkCreate:${collection}`);
     return rows.map((_, i) => ({ rowIndex: i, documentId: `d${i}`, id_en: i + 1 }));
   }
   fetchSchema(): Promise<never> {
@@ -24,7 +24,10 @@ const goodEnv = { STRAPI_URL: 'http://localhost:3000', STRAPI_TOKEN: 'tok' };
 function deps(overrides: Partial<CliDeps> = {}): CliDeps {
   return {
     fileExists: async () => true,
-    parse: async () => [{ en: { name: 'Salmonella spp.' } }],
+    parseReferences: async () => [
+      { collection: 'specie', rows: [{ en: { name: 'Gallus gallus' } }] },
+      { collection: 'matrix', rows: [{ en: { name: 'Chicken meat', iri: 'iri:1' } }] },
+    ],
     makeClient: () => new RecordingClient(),
     log: () => {},
     error: () => {},
@@ -48,11 +51,16 @@ describe('runImport', () => {
     expect(code).toBe(1);
   });
 
-  it('exits 0 and runs truncate then bulk-create on the happy path', async () => {
+  it('exits 0 and truncates all reference collections before bulk-creating any', async () => {
     const client = new RecordingClient();
     const code = await runImport('wb.xlsx', goodEnv, deps({ makeClient: () => client }));
 
     expect(code).toBe(0);
-    expect(client.calls).toEqual(['truncate', 'bulkCreate']);
+    expect(client.calls).toEqual([
+      'truncate:specie',
+      'truncate:matrix',
+      'bulkCreate:specie',
+      'bulkCreate:matrix',
+    ]);
   });
 });

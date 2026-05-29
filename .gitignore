@@ -1,5 +1,6 @@
 # AI
 CLAUDE.md
+AGENTS.md
 .claude/
 
 # misc
@@ -148,3 +149,4 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+.gitnexus
