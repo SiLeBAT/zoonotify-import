@@ -6,7 +6,7 @@ import type {
   LiveSchema,
   LiveSchemaAttribute,
 } from '../core/strapi-client.js';
-import { ImportError } from '../core/errors.js';
+import { ImportError, RequestError } from '../core/errors.js';
 
 /** The slice of Strapi's content-type-builder response the schema-drift check needs. */
 interface CtbAttribute {
@@ -18,10 +18,33 @@ interface CtbResponse {
   data: { schema: { attributes: Record<string, CtbAttribute> } };
 }
 
+/** CONTEXT.md § Throughput policy default; overridable via `--request-timeout`. */
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * Resolve a `Retry-After` header to milliseconds. The header is either a number
+ * of seconds or an HTTP-date; anything else (absent, malformed) yields
+ * `undefined`. `nowMs` is injected so the HTTP-date branch is deterministic.
+ */
+export function parseRetryAfter(
+  value: string | null,
+  nowMs: number = Date.now(),
+): number | undefined {
+  if (value === null) return undefined;
+  const trimmed = value.trim();
+  if (trimmed === '') return undefined;
+  if (/^\d+$/.test(trimmed)) return Number(trimmed) * 1000;
+  const date = Date.parse(trimmed);
+  if (Number.isNaN(date)) return undefined;
+  return Math.max(0, date - nowMs);
+}
+
 /**
  * Native-fetch implementation of the StrapiClient port. Talks to the CMS Import
- * admin API (see issue #001). One in-flight request, fail-fast on the first
- * non-2xx response — no batching, concurrency, or retry yet.
+ * admin API (issue #001). Each request is bounded by a per-request timeout
+ * (`requestTimeoutMs`); transient failures (retryable statuses, network resets,
+ * timeouts) surface as `RequestError`s so the core retry path can classify them.
+ * Batching, concurrency, and retry themselves live in the core, not here.
  */
 export class HttpStrapiClient implements StrapiClient {
   private readonly baseUrl: string;
@@ -29,6 +52,7 @@ export class HttpStrapiClient implements StrapiClient {
   constructor(
     baseUrl: string,
     private readonly token: string,
+    private readonly requestTimeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
   ) {
     // Normalize: strip any trailing slash so path joins are predictable.
     this.baseUrl = baseUrl.replace(/\/+$/, '');
@@ -62,34 +86,53 @@ export class HttpStrapiClient implements StrapiClient {
     return { attributes };
   }
 
-  private async get<T>(path: string): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      headers: { authorization: `Bearer ${this.token}` },
-    });
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '');
-      throw new ImportError(
-        `GET ${path} failed: ${response.status} ${response.statusText} ${detail}`.trim(),
-      );
-    }
-    return (await response.json()) as T;
+  private get<T>(path: string): Promise<T> {
+    return this.request<T>('GET', path);
   }
 
-  private async post<T>(path: string, body: unknown): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${this.token}`,
-      },
-      body: JSON.stringify(body),
-    });
+  private post<T>(path: string, body: unknown): Promise<T> {
+    return this.request<T>('POST', path, body);
+  }
+
+  private async request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}${path}`, {
+        method,
+        headers: {
+          ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+          authorization: `Bearer ${this.token}`,
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(this.requestTimeoutMs),
+      });
+    } catch (err) {
+      throw toTransportError(method, path, err);
+    }
+
     if (!response.ok) {
       const detail = await response.text().catch(() => '');
-      throw new ImportError(
-        `POST ${path} failed: ${response.status} ${response.statusText} ${detail}`.trim(),
+      throw new RequestError(
+        `${method} ${path} failed: ${response.status} ${response.statusText} ${detail}`.trim(),
+        {
+          status: response.status,
+          retryAfterMs: parseRetryAfter(response.headers.get('retry-after')),
+        },
       );
     }
     return (await response.json()) as T;
   }
+}
+
+/** Translate a thrown fetch rejection (timeout, connection reset, …) into a RequestError. */
+function toTransportError(method: string, path: string, err: unknown): ImportError {
+  const name = err instanceof Error ? err.name : '';
+  if (name === 'TimeoutError' || name === 'AbortError') {
+    return new RequestError(`${method} ${path} timed out`, { code: 'ETIMEDOUT' });
+  }
+  const cause = (err as { cause?: { code?: string } }).cause;
+  if (cause?.code) {
+    return new RequestError(`${method} ${path} failed: ${cause.code}`, { code: cause.code });
+  }
+  return new RequestError(`${method} ${path} failed: ${(err as Error).message}`);
 }

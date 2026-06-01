@@ -9,6 +9,9 @@ import type { ImportResult, ImportOutcome } from '../core/result.js';
 import { parseAllReferences } from '../core/parser.js';
 import { parseAllFacts } from '../core/fact-parser.js';
 import { syncImport } from '../core/orchestrator.js';
+import { DEFAULT_THROUGHPUT } from '../core/throughput.js';
+import type { ThroughputConfig } from '../core/throughput.js';
+import { CircuitBreakerError } from '../core/errors.js';
 import { runPreflight } from '../core/preflight.js';
 import { describeAllCollections } from '../core/descriptors.js';
 import { buildResult } from '../core/result.js';
@@ -20,11 +23,62 @@ export interface CliEnv {
   STRAPI_TOKEN?: string;
 }
 
+/** Raw `--`-flag strings from commander, before parsing/validation. */
+export interface RawThroughputFlags {
+  batchSize?: string;
+  concurrency?: string;
+  /** Per-request timeout in *seconds* (converted to ms in the config). */
+  requestTimeout?: string;
+  maxRetries?: string;
+  circuitBreakerThreshold?: string;
+}
+
+/**
+ * Resolve the five throughput flags into a `ThroughputConfig`, applying the
+ * CONTEXT.md defaults for any that are absent. `--request-timeout` is read in
+ * seconds and stored as milliseconds. Throws on a non-numeric or out-of-range
+ * value so the CLI can fail with exit 1 before touching the database.
+ */
+export function parseThroughputOptions(raw: RawThroughputFlags): ThroughputConfig {
+  return {
+    batchSize: intFlag('batch-size', raw.batchSize, DEFAULT_THROUGHPUT.batchSize, 1),
+    concurrency: intFlag('concurrency', raw.concurrency, DEFAULT_THROUGHPUT.concurrency, 1),
+    requestTimeoutMs:
+      intFlag(
+        'request-timeout',
+        raw.requestTimeout,
+        DEFAULT_THROUGHPUT.requestTimeoutMs / 1000,
+        1,
+      ) * 1000,
+    maxRetries: intFlag('max-retries', raw.maxRetries, DEFAULT_THROUGHPUT.maxRetries, 0),
+    circuitBreakerThreshold: intFlag(
+      'circuit-breaker-threshold',
+      raw.circuitBreakerThreshold,
+      DEFAULT_THROUGHPUT.circuitBreakerThreshold,
+      1,
+    ),
+  };
+}
+
+function intFlag(name: string, value: string | undefined, fallback: number, min: number): number {
+  if (value === undefined) return fallback;
+  if (!/^\d+$/.test(value.trim())) {
+    throw new Error(`--${name} must be a whole number, got "${value}"`);
+  }
+  const n = Number(value);
+  if (n < min) {
+    throw new Error(`--${name} must be at least ${min}, got ${n}`);
+  }
+  return n;
+}
+
 export interface RunOptions {
   /** Run pre-flight only, print the summary, and exit without touching the DB. */
   dryRun?: boolean;
   /** Skip the interactive confirmation prompt. */
   yes?: boolean;
+  /** Throughput knobs (batching, concurrency, timeout, retry, breaker). */
+  throughput?: ThroughputConfig;
 }
 
 /** Side-effecting collaborators, injected so the control flow is unit-testable. */
@@ -34,7 +88,7 @@ export interface CliDeps {
   readWorkbook: (path: string) => Promise<ExcelJS.Workbook>;
   parseReferences: (path: string) => Promise<CollectionImport[]>;
   parseFacts: (path: string) => Promise<FactImport[]>;
-  makeClient: (baseUrl: string, token: string) => StrapiClient;
+  makeClient: (baseUrl: string, token: string, requestTimeoutMs: number) => StrapiClient;
   /** Asks the operator to proceed; returns their answer. Only called on a TTY without --yes. */
   confirm: (prompt: string) => Promise<boolean>;
   /** Persists the machine-readable result file. */
@@ -61,7 +115,8 @@ export const defaultDeps: CliDeps = {
   },
   parseReferences: parseAllReferences,
   parseFacts: parseAllFacts,
-  makeClient: (baseUrl, token) => new HttpStrapiClient(baseUrl, token),
+  makeClient: (baseUrl, token, requestTimeoutMs) =>
+    new HttpStrapiClient(baseUrl, token, requestTimeoutMs),
   confirm: async (prompt) => {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     try {
@@ -106,7 +161,8 @@ export async function runImport(
     return 1;
   }
 
-  const client = deps.makeClient(env.STRAPI_URL, env.STRAPI_TOKEN);
+  const throughput = options.throughput ?? DEFAULT_THROUGHPUT;
+  const client = deps.makeClient(env.STRAPI_URL, env.STRAPI_TOKEN, throughput.requestTimeoutMs);
 
   // Check #1 + the rest of pre-flight. A workbook that won't parse is itself a
   // pre-flight failure (DB untouched, exit 2).
@@ -158,7 +214,22 @@ export async function runImport(
 
   const references = await deps.parseReferences(workbookPath);
   const facts = await deps.parseFacts(workbookPath);
-  const importReport = await syncImport(client, references, facts);
+
+  let importReport;
+  try {
+    importReport = await syncImport(client, references, facts, throughput);
+  } catch (err) {
+    if (err instanceof CircuitBreakerError) {
+      deps.error(
+        `Circuit breaker tripped: ${err.message}. The import was aborted mid-run; the database is in a partial state. See the result file and restore from your pre-run snapshot.`,
+      );
+      await deps.writeResult(
+        buildResult({ outcome: 'circuit-breaker', timestamp: deps.now(), preflight: report }),
+      );
+      return 5;
+    }
+    throw err;
+  }
 
   const collections = [...importReport.references, ...importReport.facts];
   for (const sync of collections) {

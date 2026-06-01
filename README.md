@@ -66,8 +66,30 @@ in issue #004.
 > Because the import-admin routes are content-API routes, `STRAPI_URL` must include the REST
 > prefix, e.g. `http://localhost:1337/api`.
 
-**Exit codes:** `0` on success; `1` on a missing path argument, missing `STRAPI_URL`/`STRAPI_TOKEN`,
-or a workbook file that does not exist.
+**Exit codes:** `0` on success or dry-run; `1` on a missing path argument, missing
+`STRAPI_URL`/`STRAPI_TOKEN`, an invalid throughput flag, or a workbook file that does not exist;
+`2` pre-flight failed (DB untouched); `3` operator declined the confirmation prompt; `5` the
+circuit breaker tripped and the import was aborted mid-run (DB left in a partial state — restore
+from your pre-run snapshot and consult the result file).
+
+## Throughput & resilience
+
+Bulk-creates are streamed in batches with a bounded concurrency, per-request timeouts, retry with
+exponential backoff, and a circuit breaker (see CONTEXT.md § Throughput policy). All five knobs are
+CLI flags with the defaults below:
+
+| Flag                              | Default | Meaning                                                                                   |
+| --------------------------------- | ------- | ----------------------------------------------------------------------------------------- |
+| `--batch-size <rows>`             | `200`   | Rows per bulk-create request (last batch may be partial).                                 |
+| `--concurrency <n>`               | `3`     | Maximum in-flight bulk-create requests (p-limit semaphore).                               |
+| `--request-timeout <seconds>`     | `30`    | Per-request timeout; a timeout routes into the retry path.                                |
+| `--max-retries <n>`               | `4`     | Retries per batch on `429/502/503/504`, `ECONNRESET`, `ETIMEDOUT`.                        |
+| `--circuit-breaker-threshold <n>` | `3`     | Consecutive batches that may exhaust their retry cycle before the import aborts (exit 5). |
+
+Retry backoff is `1s, 2s, 4s, 8s`; a server `Retry-After` header (seconds or HTTP-date) overrides
+the backoff for that one retry. Other `4xx` responses are treated as programming errors and are
+never retried. There is no adaptive backoff in v1 — only these static defaults and explicit
+operator overrides.
 
 ## Integration test
 

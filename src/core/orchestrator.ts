@@ -3,6 +3,8 @@ import type { StrapiClient, TruncateResult } from './strapi-client.js';
 import type { FactImport } from './fact-parser.js';
 import { RelationMap } from './relation-map.js';
 import { ImportError } from './errors.js';
+import { bulkCreateBatched, DEFAULT_THROUGHPUT } from './throughput.js';
+import type { ThroughputConfig, RetryDeps } from './throughput.js';
 
 /** Outcome of syncing one collection. */
 export interface SyncReport {
@@ -34,6 +36,8 @@ export interface ReferencesReport {
 export async function syncReferences(
   client: StrapiClient,
   imports: CollectionImport[],
+  config: ThroughputConfig = DEFAULT_THROUGHPUT,
+  deps?: RetryDeps,
 ): Promise<ReferencesReport> {
   const deletedByCollection = new Map<string, TruncateResult>();
   for (const { collection } of imports) {
@@ -43,7 +47,7 @@ export async function syncReferences(
   const relations = new RelationMap();
   const collections: SyncReport[] = [];
   for (const { collection, rows } of imports) {
-    const results = await client.bulkCreate(collection, rows);
+    const results = await bulkCreateBatched(client, collection, rows, config, deps);
     for (const result of results) {
       const row = rows[result.rowIndex]!;
       relations.add(collection, 'en', row.en.name, result.id_en);
@@ -70,9 +74,11 @@ export async function syncCollection(
   client: StrapiClient,
   collection: string,
   rows: LocalizedRow[],
+  config: ThroughputConfig = DEFAULT_THROUGHPUT,
+  deps?: RetryDeps,
 ): Promise<SyncReport> {
   const deleted = await client.truncate(collection);
-  const results = await client.bulkCreate(collection, rows);
+  const results = await bulkCreateBatched(client, collection, rows, config, deps);
   return { collection, deleted, created: results.length };
 }
 
@@ -99,6 +105,8 @@ export async function syncImport(
   client: StrapiClient,
   references: CollectionImport[],
   facts: FactImport[],
+  config: ThroughputConfig = DEFAULT_THROUGHPUT,
+  deps?: RetryDeps,
 ): Promise<ImportReport> {
   // Phase 1: truncate fact tables before touching references.
   const factDeleted = new Map<string, TruncateResult>();
@@ -107,13 +115,18 @@ export async function syncImport(
   }
 
   // Phases 2 & 3: reference truncate + create, building the relation map.
-  const { collections: referenceReports, relations } = await syncReferences(client, references);
+  const { collections: referenceReports, relations } = await syncReferences(
+    client,
+    references,
+    config,
+    deps,
+  );
 
   // Phase 4: create facts with resolved relation IDs.
   const factReports: SyncReport[] = [];
   for (const { collection, rows } of facts) {
     const resolved = rows.map((row) => resolveFactRow(row, relations));
-    const results = await client.bulkCreate(collection, resolved);
+    const results = await bulkCreateBatched(client, collection, resolved, config, deps);
     factReports.push({
       collection,
       deleted: factDeleted.get(collection)!,

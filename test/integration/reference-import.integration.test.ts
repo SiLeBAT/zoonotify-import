@@ -95,6 +95,27 @@ describe.runIf(ENABLED)('full workbook import against a live CMS', () => {
   // ID is asserted exhaustively by the unit suites (resolve-fact-row, sync-import);
   // here the GETs confirm the rows landed with the right counts and scalars.
 
+  it('re-imports correctly with batching + concurrency forced on (--batch-size 1 --concurrency 2)', async () => {
+    // Drive the throughput path hard: one row per request, two in flight. The
+    // delete-then-recreate result must match the single-batch happy path.
+    const { stdout } = await run(
+      'npx',
+      ['tsx', 'src/cli/index.ts', '--batch-size', '1', '--concurrency', '2', '-y', workbookPath],
+      {
+        cwd: repoRoot,
+        env: { ...process.env, STRAPI_URL: `${ADMIN_BASE}/api`, STRAPI_TOKEN: token },
+      },
+    );
+    expect(stdout).toMatch(/Done: 9 reference collections, 2 fact collections/);
+
+    for (const spec of EXPECTED) {
+      const en = await listCollection(ADMIN_BASE, jwt, spec.collection, 'en');
+      const de = await listCollection(ADMIN_BASE, jwt, spec.collection, 'de');
+      expect(en.pagination.total, `${spec.collection} EN count (batched)`).toBe(spec.enCount);
+      expect(de.pagination.total, `${spec.collection} DE count (batched)`).toBe(spec.deCount);
+    }
+  }, 240_000);
+
   it('--dry-run runs pre-flight, prints the summary, exits 0, and leaves the DB untouched', async () => {
     // Capture current counts so the assertion is independent of test ordering:
     // a dry run must not change them, whatever they are.

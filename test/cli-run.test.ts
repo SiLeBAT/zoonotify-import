@@ -12,6 +12,7 @@ import type {
 } from '../src/core/strapi-client.js';
 import type { BulkRow } from '../src/core/domain.js';
 import type { ImportResult } from '../src/core/result.js';
+import { RequestError } from '../src/core/errors.js';
 
 /** A workbook that passes all ten pre-flight checks (built from the integration fixture). */
 function validWorkbook(): ExcelJS.Workbook {
@@ -214,6 +215,48 @@ describe('runImport — confirmation', () => {
     expect(code).toBe(0);
     expect(confirm).not.toHaveBeenCalled();
     expect(client.calls).toContain('bulkCreate:specie');
+  });
+});
+
+describe('runImport — circuit breaker', () => {
+  it('exits 5, writes a circuit-breaker result, and points the operator at the result file', async () => {
+    // A client whose bulk-creates always 503 → the breaker trips.
+    class DownClient extends RecordingClient {
+      override async bulkCreate(collection: string, rows: BulkRow[]): Promise<never> {
+        void rows;
+        this.calls.push(`bulkCreate:${collection}`);
+        throw new RequestError('down', { status: 503 });
+      }
+    }
+    const client = new DownClient();
+    const results: ImportResult[] = [];
+    const errors: string[] = [];
+
+    const code = await runImport(
+      'wb.xlsx',
+      goodEnv,
+      deps({
+        makeClient: () => client,
+        writeResult: async (r) => {
+          results.push(r);
+        },
+        error: (m) => errors.push(m),
+      }),
+      // No retry waits, trip on the first failed batch.
+      {
+        throughput: {
+          batchSize: 1,
+          concurrency: 1,
+          requestTimeoutMs: 30000,
+          maxRetries: 0,
+          circuitBreakerThreshold: 1,
+        },
+      },
+    );
+
+    expect(code).toBe(5);
+    expect(results.at(-1)?.outcome).toBe('circuit-breaker');
+    expect(errors.some((m) => /circuit breaker/i.test(m) && /result file/i.test(m))).toBe(true);
   });
 });
 

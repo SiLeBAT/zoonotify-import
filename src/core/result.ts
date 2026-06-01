@@ -13,7 +13,8 @@ export type ImportOutcome =
   | 'preflight-failed'
   | 'declined'
   | 'dry-run'
-  | 'import-failed';
+  | 'import-failed'
+  | 'circuit-breaker';
 
 export interface ImportResult {
   outcome: ImportOutcome;
