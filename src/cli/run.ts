@@ -79,6 +79,8 @@ export interface RunOptions {
   yes?: boolean;
   /** Throughput knobs (batching, concurrency, timeout, retry, breaker). */
   throughput?: ThroughputConfig;
+  /** Allow a plain `http://` STRAPI_URL (otherwise refused). Prints a loud warning. */
+  insecure?: boolean;
 }
 
 /** Side-effecting collaborators, injected so the control flow is unit-testable. */
@@ -156,13 +158,28 @@ export async function runImport(
     deps.error('Missing STRAPI_URL or STRAPI_TOKEN — set them in .env (see .env.example).');
     return 1;
   }
+
+  // Transport: normalize the trailing slash, then enforce HTTPS unless --insecure.
+  const baseUrl = env.STRAPI_URL.replace(/\/+$/, '');
+  if (baseUrl.startsWith('http://')) {
+    if (!options.insecure) {
+      deps.error(
+        `STRAPI_URL uses insecure http:// (${baseUrl}). Refusing to send the import token over plaintext. Use an https:// URL, or pass --insecure to override (NOT recommended outside local development).`,
+      );
+      return 1;
+    }
+    deps.error(
+      `⚠️  WARNING: --insecure is set — sending the import token over plaintext http:// to ${baseUrl}. Do NOT use this against staging or production.`,
+    );
+  }
+
   if (!(await deps.fileExists(workbookPath))) {
     deps.error(`Workbook not found: ${workbookPath}`);
     return 1;
   }
 
   const throughput = options.throughput ?? DEFAULT_THROUGHPUT;
-  const client = deps.makeClient(env.STRAPI_URL, env.STRAPI_TOKEN, throughput.requestTimeoutMs);
+  const client = deps.makeClient(baseUrl, env.STRAPI_TOKEN, throughput.requestTimeoutMs);
 
   // Check #1 + the rest of pre-flight. A workbook that won't parse is itself a
   // pre-flight failure (DB untouched, exit 2).
@@ -228,7 +245,15 @@ export async function runImport(
       );
       return 5;
     }
-    throw err;
+    // Any other failure mid-import: the DB may be in a partial state. Report it
+    // (exit 4) rather than crashing, so the operator gets a result file to act on.
+    deps.error(
+      `Import failed: ${(err as Error).message}. The database may be in a partial state. See the result file and restore from your pre-run snapshot.`,
+    );
+    await deps.writeResult(
+      buildResult({ outcome: 'import-failed', timestamp: deps.now(), preflight: report }),
+    );
+    return 4;
   }
 
   const collections = [...importReport.references, ...importReport.facts];

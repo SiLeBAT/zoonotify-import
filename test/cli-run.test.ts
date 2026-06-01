@@ -37,7 +37,7 @@ class RecordingClient implements StrapiClient {
   }
 }
 
-const goodEnv = { STRAPI_URL: 'http://localhost:3000', STRAPI_TOKEN: 'tok' };
+const goodEnv = { STRAPI_URL: 'https://cms.example/api', STRAPI_TOKEN: 'tok' };
 
 function deps(overrides: Partial<CliDeps> = {}): CliDeps {
   return {
@@ -73,6 +73,53 @@ describe('runImport — argument and environment guards', () => {
     expect(await runImport('missing.xlsx', goodEnv, deps({ fileExists: async () => false }))).toBe(
       1,
     );
+  });
+});
+
+describe('runImport — transport hardening', () => {
+  it('refuses an http:// STRAPI_URL with a clear error and exits 1 before touching the DB', async () => {
+    const client = new RecordingClient();
+    const errors: string[] = [];
+    const code = await runImport(
+      'wb.xlsx',
+      { STRAPI_URL: 'http://insecure.example/api', STRAPI_TOKEN: 'tok' },
+      deps({ makeClient: () => client, error: (m) => errors.push(m) }),
+    );
+
+    expect(code).toBe(1);
+    expect(client.calls).toEqual([]);
+    expect(errors.some((m) => /http:\/\//.test(m) && /--insecure/.test(m))).toBe(true);
+  });
+
+  it('allows http:// when --insecure is passed and prints a loud stderr warning', async () => {
+    const client = new RecordingClient();
+    const errors: string[] = [];
+    const code = await runImport(
+      'wb.xlsx',
+      { STRAPI_URL: 'http://insecure.example/api', STRAPI_TOKEN: 'tok' },
+      deps({ makeClient: () => client, error: (m) => errors.push(m) }),
+      { insecure: true },
+    );
+
+    expect(code).toBe(0);
+    expect(errors.some((m) => /INSECURE|WARNING/i.test(m) && /http/i.test(m))).toBe(true);
+    expect(client.calls).toContain('bulkCreate:specie');
+  });
+
+  it('normalizes a trailing slash off STRAPI_URL before constructing the client', async () => {
+    let seenUrl = '';
+    await runImport(
+      'wb.xlsx',
+      { STRAPI_URL: 'https://cms.example/api/', STRAPI_TOKEN: 'tok' },
+      deps({
+        makeClient: (baseUrl) => {
+          seenUrl = baseUrl;
+          return new RecordingClient();
+        },
+      }),
+    );
+
+    expect(seenUrl).toBe('https://cms.example/api');
   });
 });
 
@@ -257,6 +304,38 @@ describe('runImport — circuit breaker', () => {
     expect(code).toBe(5);
     expect(results.at(-1)?.outcome).toBe('circuit-breaker');
     expect(errors.some((m) => /circuit breaker/i.test(m) && /result file/i.test(m))).toBe(true);
+  });
+});
+
+describe('runImport — import failure (non-circuit-breaker)', () => {
+  it('exits 4, writes an import-failed result, and warns the DB is partial when an import error is not the breaker', async () => {
+    // A client whose truncate rejects with a plain (non-RequestError) failure —
+    // never retried, never the breaker, but the import is wrecked mid-run.
+    class BrokenTruncateClient extends RecordingClient {
+      override async truncate(collection: string): Promise<TruncateResult> {
+        this.calls.push(`truncate:${collection}`);
+        throw new Error('relation does not exist');
+      }
+    }
+    const client = new BrokenTruncateClient();
+    const results: ImportResult[] = [];
+    const errors: string[] = [];
+
+    const code = await runImport(
+      'wb.xlsx',
+      goodEnv,
+      deps({
+        makeClient: () => client,
+        writeResult: async (r) => {
+          results.push(r);
+        },
+        error: (m) => errors.push(m),
+      }),
+    );
+
+    expect(code).toBe(4);
+    expect(results.at(-1)?.outcome).toBe('import-failed');
+    expect(errors.some((m) => /partial/i.test(m) && /result file/i.test(m))).toBe(true);
   });
 });
 
