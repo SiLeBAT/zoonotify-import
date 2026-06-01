@@ -40,12 +40,33 @@ export function chunk<T>(items: T[], size: number): T[][] {
   return batches;
 }
 
+/**
+ * One bulk-create batch's outcome, emitted as it completes. Feeds `--verbose`
+ * batch timing and the per-batch detail in the result file. `index` is the
+ * batch's position within the collection's row stream (0-based).
+ */
+export interface BatchEvent {
+  collection: string;
+  index: number;
+  rows: number;
+  outcome: 'created' | 'failed';
+  /** Attempts made (1 + retries used). */
+  attempts: number;
+  durationMs: number;
+  /** Failure message, present only when `outcome === 'failed'`. */
+  error?: string;
+}
+
 /** Injected so retry/backoff is testable without real timers. */
 export interface RetryDeps {
   sleep: (ms: number) => Promise<void>;
+  /** Wall clock for batch timing; injectable for deterministic tests. */
+  now?: () => number;
+  /** Notified as each batch settles (created or failed). */
+  onBatch?: (event: BatchEvent) => void;
 }
 
-const defaultRetryDeps: RetryDeps = {
+export const defaultRetryDeps: RetryDeps = {
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 };
 
@@ -111,18 +132,46 @@ export async function bulkCreateBatched(
     return start;
   });
 
+  const clock = deps.now ?? Date.now;
+
   await Promise.all(
     batches.map((batch, bi) =>
       limit(async () => {
         // Stop launching once the breaker has already tripped.
         if (tripped) return;
+        const start = clock();
+        let attempts = 0;
         try {
-          const results = await withRetry(() => client.bulkCreate(collection, batch), config, deps);
+          const results = await withRetry(
+            () => {
+              attempts += 1;
+              return client.bulkCreate(collection, batch);
+            },
+            config,
+            deps,
+          );
           consecutiveFailures = 0;
           perBatch[bi] = results.map((r) => ({ ...r, rowIndex: r.rowIndex + offsets[bi]! }));
+          deps.onBatch?.({
+            collection,
+            index: bi,
+            rows: batch.length,
+            outcome: 'created',
+            attempts,
+            durationMs: clock() - start,
+          });
         } catch (err) {
           firstError ??= err;
           consecutiveFailures += 1;
+          deps.onBatch?.({
+            collection,
+            index: bi,
+            rows: batch.length,
+            outcome: 'failed',
+            attempts,
+            durationMs: clock() - start,
+            error: (err as Error).message,
+          });
           if (!tripped && consecutiveFailures >= config.circuitBreakerThreshold) {
             tripped = new CircuitBreakerError(collection, consecutiveFailures, err);
           }

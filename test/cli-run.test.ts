@@ -43,6 +43,7 @@ function deps(overrides: Partial<CliDeps> = {}): CliDeps {
   return {
     fileExists: async () => true,
     readWorkbook: async () => validWorkbook(),
+    hashFile: async () => 'sha256-test-digest',
     parseReferences: async () => [
       { collection: 'specie', rows: [{ en: { name: 'Gallus gallus' } }] },
       { collection: 'matrix', rows: [{ en: { name: 'Chicken meat', iri: 'iri:1' } }] },
@@ -336,6 +337,93 @@ describe('runImport — import failure (non-circuit-breaker)', () => {
     expect(code).toBe(4);
     expect(results.at(-1)?.outcome).toBe('import-failed');
     expect(errors.some((m) => /partial/i.test(m) && /result file/i.test(m))).toBe(true);
+  });
+});
+
+describe('runImport — result file contents', () => {
+  it('stamps a successful result with exitCode, source-file sha256 and per-batch collection detail', async () => {
+    const client = new RecordingClient();
+    const results: ImportResult[] = [];
+    const code = await runImport(
+      'wb.xlsx',
+      goodEnv,
+      deps({
+        makeClient: () => client,
+        hashFile: async () => 'deadbeef',
+        writeResult: async (r) => {
+          results.push(r);
+        },
+      }),
+    );
+
+    expect(code).toBe(0);
+    const result = results.at(-1)!;
+    expect(result.exitCode).toBe(0);
+    expect(result.sourceFile).toEqual({ path: 'wb.xlsx', sha256: 'deadbeef' });
+    expect(typeof result.startedAt).toBe('string');
+    expect(typeof result.completedAt).toBe('string');
+    const specie = result.collections.find((c) => c.collection === 'specie');
+    expect(specie).toBeDefined();
+    expect(specie!.batches.length).toBeGreaterThan(0);
+    expect(specie!.batches[0]).toMatchObject({ index: 0, outcome: 'created' });
+    expect(result.failures).toEqual([]);
+  });
+
+  it('writes the result to the path given by --report', async () => {
+    let seenPath = '';
+    await runImport(
+      'wb.xlsx',
+      goodEnv,
+      deps({
+        writeResult: async (_r, path) => {
+          seenPath = path;
+        },
+      }),
+      { report: '/tmp/my-result.json' },
+    );
+
+    expect(seenPath).toBe('/tmp/my-result.json');
+  });
+
+  it('logs per-batch timing when --verbose is set', async () => {
+    const logs: string[] = [];
+    await runImport('wb.xlsx', goodEnv, deps({ log: (m) => logs.push(m) }), { verbose: true });
+    expect(logs.some((l) => /^batch /.test(l) && /created/.test(l))).toBe(true);
+  });
+
+  it('records the breaker failure in the result failures[] (exit 5)', async () => {
+    class DownClient extends RecordingClient {
+      override async bulkCreate(collection: string): Promise<never> {
+        this.calls.push(`bulkCreate:${collection}`);
+        throw new RequestError('down', { status: 503 });
+      }
+    }
+    const results: ImportResult[] = [];
+    const code = await runImport(
+      'wb.xlsx',
+      goodEnv,
+      deps({
+        makeClient: () => new DownClient(),
+        writeResult: async (r) => {
+          results.push(r);
+        },
+      }),
+      {
+        throughput: {
+          batchSize: 1,
+          concurrency: 1,
+          requestTimeoutMs: 30000,
+          maxRetries: 0,
+          circuitBreakerThreshold: 1,
+        },
+      },
+    );
+
+    expect(code).toBe(5);
+    const result = results.at(-1)!;
+    expect(result.exitCode).toBe(5);
+    expect(result.failures.length).toBeGreaterThan(0);
+    expect(result.failures.some((f) => /down/.test(f.message))).toBe(true);
   });
 });
 

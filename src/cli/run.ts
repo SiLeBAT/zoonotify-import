@@ -1,16 +1,23 @@
-import { access, writeFile } from 'node:fs/promises';
+import { access, readFile, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { createInterface } from 'node:readline/promises';
 import ExcelJS from 'exceljs';
-import type { CollectionImport } from '../core/orchestrator.js';
+import type { CollectionImport, SyncReport } from '../core/orchestrator.js';
 import type { FactImport } from '../core/fact-parser.js';
 import type { StrapiClient } from '../core/strapi-client.js';
 import type { PreflightReport } from '../core/preflight.js';
-import type { ImportResult, ImportOutcome } from '../core/result.js';
+import type {
+  ImportResult,
+  ImportOutcome,
+  CollectionResult,
+  ImportFailure,
+  SourceFileInfo,
+} from '../core/result.js';
 import { parseAllReferences } from '../core/parser.js';
 import { parseAllFacts } from '../core/fact-parser.js';
 import { syncImport } from '../core/orchestrator.js';
-import { DEFAULT_THROUGHPUT } from '../core/throughput.js';
-import type { ThroughputConfig } from '../core/throughput.js';
+import { DEFAULT_THROUGHPUT, defaultRetryDeps } from '../core/throughput.js';
+import type { ThroughputConfig, BatchEvent, RetryDeps } from '../core/throughput.js';
 import { CircuitBreakerError } from '../core/errors.js';
 import { runPreflight } from '../core/preflight.js';
 import { describeAllCollections } from '../core/descriptors.js';
@@ -81,6 +88,10 @@ export interface RunOptions {
   throughput?: ThroughputConfig;
   /** Allow a plain `http://` STRAPI_URL (otherwise refused). Prints a loud warning. */
   insecure?: boolean;
+  /** Result file path; defaults to `./import-result-<ISO>.json`. */
+  report?: string;
+  /** Log per-batch timing to stdout while importing. */
+  verbose?: boolean;
 }
 
 /** Side-effecting collaborators, injected so the control flow is unit-testable. */
@@ -88,13 +99,15 @@ export interface CliDeps {
   fileExists: (path: string) => Promise<boolean>;
   /** Reads the workbook for pre-flight (check #1). Rejects if the file is not valid xlsx. */
   readWorkbook: (path: string) => Promise<ExcelJS.Workbook>;
+  /** SHA-256 hex digest of the workbook bytes, for the result file's traceability fingerprint. */
+  hashFile: (path: string) => Promise<string>;
   parseReferences: (path: string) => Promise<CollectionImport[]>;
   parseFacts: (path: string) => Promise<FactImport[]>;
   makeClient: (baseUrl: string, token: string, requestTimeoutMs: number) => StrapiClient;
   /** Asks the operator to proceed; returns their answer. Only called on a TTY without --yes. */
   confirm: (prompt: string) => Promise<boolean>;
-  /** Persists the machine-readable result file. */
-  writeResult: (result: ImportResult) => Promise<void>;
+  /** Persists the machine-readable result file at the resolved path. */
+  writeResult: (result: ImportResult, path: string) => Promise<void>;
   now: () => string;
   isTty: () => boolean;
   log: (message: string) => void;
@@ -115,6 +128,10 @@ export const defaultDeps: CliDeps = {
     await workbook.xlsx.readFile(path);
     return workbook;
   },
+  hashFile: async (path) =>
+    createHash('sha256')
+      .update(await readFile(path))
+      .digest('hex'),
   parseReferences: parseAllReferences,
   parseFacts: parseAllFacts,
   makeClient: (baseUrl, token, requestTimeoutMs) =>
@@ -128,9 +145,8 @@ export const defaultDeps: CliDeps = {
       rl.close();
     }
   },
-  writeResult: async (result) => {
-    const safe = result.timestamp.replace(/[:.]/g, '-');
-    await writeFile(`./import-result-${safe}.json`, JSON.stringify(result, null, 2), 'utf8');
+  writeResult: async (result, path) => {
+    await writeFile(path, JSON.stringify(result, null, 2), 'utf8');
   },
   now: () => new Date().toISOString(),
   isTty: () => Boolean(process.stdout.isTTY),
@@ -140,9 +156,12 @@ export const defaultDeps: CliDeps = {
 
 /**
  * Validates inputs, runs the full ten-check pre-flight, and — unless this is a
- * dry run or the operator declines — imports the workbook. Exit codes: 0 success
- * / dry-run, 1 invalid args/env/file, 2 pre-flight failed (DB untouched), 3 the
- * operator declined at the confirmation prompt. See CONTEXT.md § Pre-flight.
+ * dry run or the operator declines — imports the workbook. Returns the process
+ * exit code, all six of which are reachable:
+ *   0 success / dry-run · 1 invalid args/env/file/flag/insecure-url ·
+ *   2 pre-flight failed (DB untouched) · 3 operator declined ·
+ *   4 import failed mid-run (DB partial) · 5 circuit breaker tripped (DB partial).
+ * See CONTEXT.md § Pre-flight validation / Transport / Atomicity scope.
  */
 export async function runImport(
   workbookPath: string | undefined,
@@ -178,6 +197,33 @@ export async function runImport(
     return 1;
   }
 
+  const startedAt = deps.now();
+  const sourceFile: SourceFileInfo = {
+    path: workbookPath,
+    sha256: await deps.hashFile(workbookPath),
+  };
+  const reportPath = options.report ?? defaultReportPath(startedAt);
+
+  /** Build + persist the result file, capturing the completion timestamp. */
+  const persist = (
+    outcome: ImportOutcome,
+    exitCode: number,
+    preflight: PreflightReport,
+    extra: { collections?: CollectionResult[]; failures?: ImportFailure[] } = {},
+  ): Promise<void> =>
+    deps.writeResult(
+      buildResult({
+        outcome,
+        exitCode,
+        startedAt,
+        completedAt: deps.now(),
+        sourceFile,
+        preflight,
+        ...extra,
+      }),
+      reportPath,
+    );
+
   const throughput = options.throughput ?? DEFAULT_THROUGHPUT;
   const client = deps.makeClient(baseUrl, env.STRAPI_TOKEN, throughput.requestTimeoutMs);
 
@@ -191,7 +237,7 @@ export async function runImport(
     });
   } catch (err) {
     deps.error(`Could not read workbook as .xlsx: ${(err as Error).message}`);
-    await writeFailedReadResult(deps, workbookPath, err as Error);
+    await persist('preflight-failed', 2, unreadableWorkbookReport(workbookPath, err as Error));
     return 2;
   }
 
@@ -201,9 +247,7 @@ export async function runImport(
     deps.error(
       `Pre-flight failed: ${report.errors.length} error(s). Database untouched. See the result file.`,
     );
-    await deps.writeResult(
-      buildResult({ outcome: 'preflight-failed', timestamp: deps.now(), preflight: report }),
-    );
+    await persist('preflight-failed', 2, report);
     return 2;
   }
 
@@ -211,9 +255,7 @@ export async function runImport(
 
   if (options.dryRun) {
     deps.log('Dry run: pre-flight passed; no changes were made.');
-    await deps.writeResult(
-      buildResult({ outcome: 'dry-run', timestamp: deps.now(), preflight: report }),
-    );
+    await persist('dry-run', 0, report);
     return 0;
   }
 
@@ -222,9 +264,7 @@ export async function runImport(
     const proceed = await deps.confirm(`${confirmationText(report)} Proceed? [y/N] `);
     if (!proceed) {
       deps.log('Aborted by operator. No changes were made.');
-      await deps.writeResult(
-        buildResult({ outcome: 'declined', timestamp: deps.now(), preflight: report }),
-      );
+      await persist('declined', 3, report);
       return 3;
     }
   }
@@ -232,17 +272,28 @@ export async function runImport(
   const references = await deps.parseReferences(workbookPath);
   const facts = await deps.parseFacts(workbookPath);
 
+  // Collect per-batch detail for both the result file and (when --verbose) stdout.
+  const batchEvents: BatchEvent[] = [];
+  const retryDeps: RetryDeps = {
+    ...defaultRetryDeps,
+    onBatch: (event) => {
+      batchEvents.push(event);
+      if (options.verbose) {
+        deps.log(formatBatch(event));
+      }
+    },
+  };
+
   let importReport;
   try {
-    importReport = await syncImport(client, references, facts, throughput);
+    importReport = await syncImport(client, references, facts, throughput, retryDeps);
   } catch (err) {
+    const failures = collectFailures(batchEvents, err);
     if (err instanceof CircuitBreakerError) {
       deps.error(
         `Circuit breaker tripped: ${err.message}. The import was aborted mid-run; the database is in a partial state. See the result file and restore from your pre-run snapshot.`,
       );
-      await deps.writeResult(
-        buildResult({ outcome: 'circuit-breaker', timestamp: deps.now(), preflight: report }),
-      );
+      await persist('circuit-breaker', 5, report, { failures });
       return 5;
     }
     // Any other failure mid-import: the DB may be in a partial state. Report it
@@ -250,14 +301,12 @@ export async function runImport(
     deps.error(
       `Import failed: ${(err as Error).message}. The database may be in a partial state. See the result file and restore from your pre-run snapshot.`,
     );
-    await deps.writeResult(
-      buildResult({ outcome: 'import-failed', timestamp: deps.now(), preflight: report }),
-    );
+    await persist('import-failed', 4, report, { failures });
     return 4;
   }
 
-  const collections = [...importReport.references, ...importReport.facts];
-  for (const sync of collections) {
+  const syncs = [...importReport.references, ...importReport.facts];
+  for (const sync of syncs) {
     deps.log(
       `Imported ${sync.collection}: deleted en=${sync.deleted.en} de=${sync.deleted.de}, created ${sync.created}.`,
     );
@@ -265,10 +314,53 @@ export async function runImport(
   deps.log(
     `Done: ${importReport.references.length} reference collections, ${importReport.facts.length} fact collections, ${importReport.relations.size} relation keys.`,
   );
-  await deps.writeResult(
-    buildResult({ outcome: 'success', timestamp: deps.now(), preflight: report, collections }),
-  );
+  await persist('success', 0, report, { collections: toCollectionResults(syncs, batchEvents) });
   return 0;
+}
+
+/** Default result-file name, derived from the run's start timestamp. */
+function defaultReportPath(startedAt: string): string {
+  return `./import-result-${startedAt.replace(/[:.]/g, '-')}.json`;
+}
+
+/** Joins each collection's truncate/insert counts with its per-batch detail. */
+function toCollectionResults(syncs: SyncReport[], events: BatchEvent[]): CollectionResult[] {
+  return syncs.map((sync) => ({
+    collection: sync.collection,
+    deleted: sync.deleted,
+    created: sync.created,
+    batches: events
+      .filter((e) => e.collection === sync.collection)
+      .sort((a, b) => a.index - b.index)
+      .map((e) => ({
+        index: e.index,
+        rows: e.rows,
+        outcome: e.outcome,
+        attempts: e.attempts,
+        durationMs: e.durationMs,
+        ...(e.error !== undefined ? { error: e.error } : {}),
+      })),
+  }));
+}
+
+/** Builds the diagnostics list from the failed batches plus the fatal error. */
+function collectFailures(events: BatchEvent[], err: unknown): ImportFailure[] {
+  const failures: ImportFailure[] = events
+    .filter((e) => e.outcome === 'failed')
+    .map((e) => ({
+      collection: e.collection,
+      batchIndex: e.index,
+      message: e.error ?? 'batch failed',
+    }));
+  if (failures.length === 0) {
+    const collection = err instanceof CircuitBreakerError ? err.collection : undefined;
+    failures.push(
+      collection
+        ? { collection, message: (err as Error).message }
+        : { message: (err as Error).message },
+    );
+  }
+  return failures;
 }
 
 /** Logs every pre-flight error and warning so the operator sees the whole list. */
@@ -286,13 +378,18 @@ function formatSummary(report: PreflightReport): string {
   return `Pre-flight: parsed ${totalRows} rows across ${collections} collections — ${report.errors.length} error(s), ${report.warnings.length} warning(s).`;
 }
 
+function formatBatch(event: BatchEvent): string {
+  const attempts = event.attempts === 1 ? '1 attempt' : `${event.attempts} attempts`;
+  return `batch ${event.collection}#${event.index}: ${event.rows} row(s) ${event.outcome} in ${event.durationMs}ms (${attempts})`;
+}
+
 function confirmationText(report: PreflightReport): string {
   return `${formatSummary(report)} About to DELETE and re-create ${report.summary.collections} collections (take a DB snapshot first).`;
 }
 
-async function writeFailedReadResult(deps: CliDeps, path: string, err: Error): Promise<void> {
-  const outcome: ImportOutcome = 'preflight-failed';
-  const preflight: PreflightReport = {
+/** Synthesizes a check-1 pre-flight report for a workbook that would not parse. */
+function unreadableWorkbookReport(path: string, err: Error): PreflightReport {
+  return {
     ok: false,
     errors: [
       {
@@ -304,5 +401,4 @@ async function writeFailedReadResult(deps: CliDeps, path: string, err: Error): P
     warnings: [],
     summary: { collections: 0, rowsByCollection: {}, totalRows: 0 },
   };
-  await deps.writeResult(buildResult({ outcome, timestamp: deps.now(), preflight }));
 }
