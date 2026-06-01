@@ -79,6 +79,73 @@ function intFlag(name: string, value: string | undefined, fallback: number, min:
   return n;
 }
 
+/** Raw CLI flags from commander (strings/booleans), before config merge. */
+export interface RawCliFlags extends RawThroughputFlags {
+  report?: string;
+  insecure?: boolean;
+  verbose?: boolean;
+  quiet?: boolean;
+  /** commander sets this `false` when `--no-color` is passed; `true`/undefined otherwise. */
+  color?: boolean;
+  dryRun?: boolean;
+  yes?: boolean;
+}
+
+/** Optional `--config` file: defaults that lose to any explicit flag. */
+export interface ImportConfigFile {
+  batchSize?: number;
+  concurrency?: number;
+  /** Per-request timeout in *seconds*. */
+  requestTimeout?: number;
+  maxRetries?: number;
+  circuitBreakerThreshold?: number;
+  report?: string;
+  insecure?: boolean;
+  verbose?: boolean;
+  quiet?: boolean;
+  noColor?: boolean;
+}
+
+/** Fully-resolved CLI configuration after flag/config/default precedence. */
+export interface ResolvedCli {
+  throughput: ThroughputConfig;
+  report?: string;
+  insecure: boolean;
+  verbose: boolean;
+  quiet: boolean;
+  color: boolean;
+  dryRun: boolean;
+  yes: boolean;
+}
+
+/**
+ * Merge command-line flags over an optional `--config` file over the built-in
+ * defaults: an explicit flag wins, otherwise the config value, otherwise the
+ * CONTEXT.md default. Throughput flags are resolved through
+ * `parseThroughputOptions` so the same validation applies to both sources.
+ */
+export function resolveCli(flags: RawCliFlags, config: ImportConfigFile = {}): ResolvedCli {
+  const str = (n: number | undefined): string | undefined =>
+    n === undefined ? undefined : String(n);
+  const throughput = parseThroughputOptions({
+    batchSize: flags.batchSize ?? str(config.batchSize),
+    concurrency: flags.concurrency ?? str(config.concurrency),
+    requestTimeout: flags.requestTimeout ?? str(config.requestTimeout),
+    maxRetries: flags.maxRetries ?? str(config.maxRetries),
+    circuitBreakerThreshold: flags.circuitBreakerThreshold ?? str(config.circuitBreakerThreshold),
+  });
+  return {
+    throughput,
+    report: flags.report ?? config.report,
+    insecure: flags.insecure ?? config.insecure ?? false,
+    verbose: flags.verbose ?? config.verbose ?? false,
+    quiet: flags.quiet ?? config.quiet ?? false,
+    color: flags.color ?? !(config.noColor ?? false),
+    dryRun: flags.dryRun ?? false,
+    yes: flags.yes ?? false,
+  };
+}
+
 export interface RunOptions {
   /** Run pre-flight only, print the summary, and exit without touching the DB. */
   dryRun?: boolean;
