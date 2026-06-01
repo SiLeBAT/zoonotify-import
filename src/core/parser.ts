@@ -4,6 +4,7 @@ import type { CollectionImport } from './orchestrator.js';
 import type { ReferenceCollectionSpec } from './reference-collections.js';
 import { REFERENCE_COLLECTIONS, referenceSpec } from './reference-collections.js';
 import { MissingColumnError, SheetNotFoundError } from './errors.js';
+import { cellValue, readHeader } from './cells.js';
 
 /**
  * Reads one reference-collection sheet and returns its rows as LocalizedRows,
@@ -110,25 +111,4 @@ function buildRow(
 
 function setField(fields: LocaleFields, attr: string, value: string): void {
   (fields as unknown as Record<string, string>)[attr] = value;
-}
-
-function readHeader(sheet: ExcelJS.Worksheet): Map<string, number> {
-  const headers = new Map<string, number>();
-  sheet.getRow(1).eachCell((cell, col) => {
-    headers.set(String(cell.value).trim(), col);
-  });
-  return headers;
-}
-
-/** Cell values treated as "no value" per source-xlsx-format.md §2. */
-const SENTINELS = new Set(['', '-', '_']);
-
-/** Returns the trimmed cell text, or `undefined` for an empty/blank/sentinel cell. */
-function cellValue(row: ExcelJS.Row, col: number): string | undefined {
-  const value = row.getCell(col).value;
-  if (value === null || value === undefined) {
-    return undefined;
-  }
-  const text = String(value).trim();
-  return SENTINELS.has(text) ? undefined : text;
 }

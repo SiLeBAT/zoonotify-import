@@ -78,7 +78,7 @@ export async function createImportToken(baseUrl: string, jwt: string): Promise<s
 }
 
 interface CmResult {
-  results: Array<{ id: number; name?: string; iri?: string }>;
+  results: Array<{ id: number; name?: string; iri?: string; [field: string]: unknown }>;
   pagination: { total: number };
 }
 

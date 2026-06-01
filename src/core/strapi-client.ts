@@ -1,4 +1,4 @@
-import type { LocalizedRow } from './domain.js';
+import type { BulkRow } from './domain.js';
 
 /** Per-locale row counts deleted by a truncate. */
 export interface TruncateResult {
@@ -22,6 +22,6 @@ export interface BulkCreateResult {
  */
 export interface StrapiClient {
   truncate(collection: string): Promise<TruncateResult>;
-  bulkCreate(collection: string, rows: LocalizedRow[]): Promise<BulkCreateResult[]>;
+  bulkCreate(collection: string, rows: BulkRow[]): Promise<BulkCreateResult[]>;
   fetchSchema(collection: string): Promise<unknown>;
 }

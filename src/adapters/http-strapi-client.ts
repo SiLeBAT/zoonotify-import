@@ -1,4 +1,4 @@
-import type { LocalizedRow } from '../core/domain.js';
+import type { BulkRow } from '../core/domain.js';
 import type { StrapiClient, TruncateResult, BulkCreateResult } from '../core/strapi-client.js';
 import { ImportError, NotImplementedError } from '../core/errors.js';
 
@@ -22,7 +22,7 @@ export class HttpStrapiClient implements StrapiClient {
     return this.post<TruncateResult>('/import-admin/truncate', { collection });
   }
 
-  bulkCreate(collection: string, rows: LocalizedRow[]): Promise<BulkCreateResult[]> {
+  bulkCreate(collection: string, rows: BulkRow[]): Promise<BulkCreateResult[]> {
     return this.post<BulkCreateResult[]>('/import-admin/bulk-create', { collection, rows });
   }
 

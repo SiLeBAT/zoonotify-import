@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { syncReferences } from '../src/core/orchestrator.js';
 import type { StrapiClient, TruncateResult, BulkCreateResult } from '../src/core/strapi-client.js';
-import type { LocalizedRow } from '../src/core/domain.js';
+import type { BulkRow, LocalizedRow } from '../src/core/domain.js';
 
 class FakeStrapiClient implements StrapiClient {
   calls: string[] = [];
@@ -11,7 +11,7 @@ class FakeStrapiClient implements StrapiClient {
     return { en: 1, de: 1 };
   }
 
-  async bulkCreate(collection: string, rows: LocalizedRow[]): Promise<BulkCreateResult[]> {
+  async bulkCreate(collection: string, rows: BulkRow[]): Promise<BulkCreateResult[]> {
     this.calls.push(`bulkCreate:${collection}`);
     return rows.map((_, rowIndex) => ({
       rowIndex,

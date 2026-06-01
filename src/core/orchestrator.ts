@@ -1,6 +1,8 @@
-import type { LocalizedRow } from './domain.js';
+import type { AttrValue, BulkRow, LocalizedRow, ParsedFactRow } from './domain.js';
 import type { StrapiClient, TruncateResult } from './strapi-client.js';
+import type { FactImport } from './fact-parser.js';
 import { RelationMap } from './relation-map.js';
+import { ImportError } from './errors.js';
 
 /** Outcome of syncing one collection. */
 export interface SyncReport {
@@ -72,4 +74,89 @@ export async function syncCollection(
   const deleted = await client.truncate(collection);
   const results = await client.bulkCreate(collection, rows);
   return { collection, deleted, created: results.length };
+}
+
+/** Outcome of importing the whole workbook (reference + fact layers). */
+export interface ImportReport {
+  references: SyncReport[];
+  facts: SyncReport[];
+  relations: RelationMap;
+}
+
+/**
+ * Import the whole workbook in the CONTEXT.md § Import phase order:
+ *   1. truncate every fact table first (so reference rows they point at can be
+ *      removed without violating relations),
+ *   2. truncate + bulk-create every reference table, capturing IDs into the
+ *      relation map,
+ *   3. bulk-create every fact table with relation fields stamped from that map.
+ *
+ * Fact creation therefore runs strictly after all reference imports complete.
+ * Callers are expected to have passed pre-flight (relation references resolve)
+ * before invoking this; resolveFactRow still throws defensively on a miss.
+ */
+export async function syncImport(
+  client: StrapiClient,
+  references: CollectionImport[],
+  facts: FactImport[],
+): Promise<ImportReport> {
+  // Phase 1: truncate fact tables before touching references.
+  const factDeleted = new Map<string, TruncateResult>();
+  for (const { collection } of facts) {
+    factDeleted.set(collection, await client.truncate(collection));
+  }
+
+  // Phases 2 & 3: reference truncate + create, building the relation map.
+  const { collections: referenceReports, relations } = await syncReferences(client, references);
+
+  // Phase 4: create facts with resolved relation IDs.
+  const factReports: SyncReport[] = [];
+  for (const { collection, rows } of facts) {
+    const resolved = rows.map((row) => resolveFactRow(row, relations));
+    const results = await client.bulkCreate(collection, resolved);
+    factReports.push({
+      collection,
+      deleted: factDeleted.get(collection)!,
+      created: results.length,
+    });
+  }
+
+  return { references: referenceReports, facts: factReports, relations };
+}
+
+/**
+ * Translate one parsed fact row into the `{ en, de? }` payload the bulk-create
+ * port expects, stamping each relation with its integer ID from the relation
+ * map. Relations whose locale name is absent are omitted (not nulled). The DE
+ * payload is built only when the row supplied DE-side data.
+ */
+export function resolveFactRow(row: ParsedFactRow, relations: RelationMap): BulkRow {
+  const en: Record<string, AttrValue> = { ...row.scalars.en };
+  const de: Record<string, AttrValue> = { ...row.scalars.de };
+
+  for (const ref of row.relations) {
+    if (ref.en !== undefined) {
+      en[ref.attr] = lookup(relations, ref.collection, 'en', ref.en);
+    }
+    if (row.hasDe && ref.de !== undefined) {
+      de[ref.attr] = lookup(relations, ref.collection, 'de', ref.de);
+    }
+  }
+
+  return row.hasDe ? { en, de } : { en };
+}
+
+function lookup(
+  relations: RelationMap,
+  collection: string,
+  locale: 'en' | 'de',
+  name: string,
+): number {
+  const id = relations.get(collection, locale, name);
+  if (id === undefined) {
+    throw new ImportError(
+      `relation ${collection} (${locale}) "${name}" was not resolved — did pre-flight pass?`,
+    );
+  }
+  return id;
 }

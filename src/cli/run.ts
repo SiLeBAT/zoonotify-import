@@ -1,8 +1,11 @@
 import { access } from 'node:fs/promises';
 import type { CollectionImport } from '../core/orchestrator.js';
+import type { FactImport } from '../core/fact-parser.js';
 import type { StrapiClient } from '../core/strapi-client.js';
 import { parseAllReferences } from '../core/parser.js';
-import { syncReferences } from '../core/orchestrator.js';
+import { parseAllFacts } from '../core/fact-parser.js';
+import { syncImport } from '../core/orchestrator.js';
+import { buildReferenceNameIndex, checkRelationReferences } from '../core/preflight.js';
 import { HttpStrapiClient } from '../adapters/http-strapi-client.js';
 import { logger } from './logger.js';
 
@@ -15,6 +18,7 @@ export interface CliEnv {
 export interface CliDeps {
   fileExists: (path: string) => Promise<boolean>;
   parseReferences: (path: string) => Promise<CollectionImport[]>;
+  parseFacts: (path: string) => Promise<FactImport[]>;
   makeClient: (baseUrl: string, token: string) => StrapiClient;
   log: (message: string) => void;
   error: (message: string) => void;
@@ -30,16 +34,18 @@ export const defaultDeps: CliDeps = {
     }
   },
   parseReferences: parseAllReferences,
+  parseFacts: parseAllFacts,
   makeClient: (baseUrl, token) => new HttpStrapiClient(baseUrl, token),
   log: (message) => logger.info(message),
   error: (message) => logger.error(message),
 };
 
 /**
- * Validates inputs, then imports the full reference layer: truncate every
- * reference collection, then bulk-create every reference collection. Returns the
- * process exit code: 0 on success, 1 on invalid args / missing env / missing
- * workbook file.
+ * Validates inputs, then imports the whole workbook (reference + fact layers)
+ * via syncImport. Pre-flight check #7 (relation references resolve) runs before
+ * any destructive work; if it finds unresolved references the database is left
+ * untouched. Returns the process exit code: 0 on success, 1 on invalid args /
+ * missing env / missing workbook file, 2 on pre-flight failure.
  */
 export async function runImport(
   workbookPath: string | undefined,
@@ -59,15 +65,42 @@ export async function runImport(
     return 1;
   }
 
-  const imports = await deps.parseReferences(workbookPath);
-  const client = deps.makeClient(env.STRAPI_URL, env.STRAPI_TOKEN);
-  const { collections, relations } = await syncReferences(client, imports);
+  const references = await deps.parseReferences(workbookPath);
+  const facts = await deps.parseFacts(workbookPath);
 
-  for (const report of collections) {
+  // Note any spec-ignored columns that were present and dropped (e.g.
+  // prevalence's matrixDetail_*/sampleType_* — no such relations in the schema).
+  for (const fact of facts) {
+    if (fact.droppedColumns && fact.droppedColumns.length > 0) {
+      deps.log(
+        `Sheet ${fact.collection}: ignored non-schema columns ${fact.droppedColumns.join(', ')}.`,
+      );
+    }
+  }
+
+  // Pre-flight check #7: every fact relation must resolve in the parsed
+  // reference sheets. Runs before any truncate, so a failure leaves the DB alone.
+  const findings = checkRelationReferences(facts, buildReferenceNameIndex(references));
+  if (findings.length > 0) {
+    for (const finding of findings) {
+      deps.error(finding.message);
+    }
+    deps.error(
+      `Pre-flight failed: ${findings.length} unresolved relation reference(s). Database untouched.`,
+    );
+    return 2;
+  }
+
+  const client = deps.makeClient(env.STRAPI_URL, env.STRAPI_TOKEN);
+  const report = await syncImport(client, references, facts);
+
+  for (const sync of [...report.references, ...report.facts]) {
     deps.log(
-      `Imported ${report.collection}: deleted en=${report.deleted.en} de=${report.deleted.de}, created ${report.created}.`,
+      `Imported ${sync.collection}: deleted en=${sync.deleted.en} de=${sync.deleted.de}, created ${sync.created}.`,
     );
   }
-  deps.log(`Done: ${collections.length} reference collections, ${relations.size} relation keys.`);
+  deps.log(
+    `Done: ${report.references.length} reference collections, ${report.facts.length} fact collections, ${report.relations.size} relation keys.`,
+  );
   return 0;
 }
