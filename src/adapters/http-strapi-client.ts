@@ -1,6 +1,22 @@
 import type { BulkRow } from '../core/domain.js';
-import type { StrapiClient, TruncateResult, BulkCreateResult } from '../core/strapi-client.js';
-import { ImportError, NotImplementedError } from '../core/errors.js';
+import type {
+  StrapiClient,
+  TruncateResult,
+  BulkCreateResult,
+  LiveSchema,
+  LiveSchemaAttribute,
+} from '../core/strapi-client.js';
+import { ImportError } from '../core/errors.js';
+
+/** The slice of Strapi's content-type-builder response the schema-drift check needs. */
+interface CtbAttribute {
+  type: string;
+  required?: boolean;
+  pluginOptions?: { i18n?: { localized?: boolean } };
+}
+interface CtbResponse {
+  data: { schema: { attributes: Record<string, CtbAttribute> } };
+}
 
 /**
  * Native-fetch implementation of the StrapiClient port. Talks to the CMS Import
@@ -26,8 +42,37 @@ export class HttpStrapiClient implements StrapiClient {
     return this.post<BulkCreateResult[]>('/import-admin/bulk-create', { collection, rows });
   }
 
-  fetchSchema(collection: string): Promise<unknown> {
-    return Promise.reject(new NotImplementedError(`fetchSchema(${collection})`));
+  /**
+   * Fetches a collection's live schema from the content-type-builder and
+   * normalizes it for check #10. Best-effort: if the endpoint is unreachable or
+   * forbidden this rejects, and the pre-flight orchestrator degrades to a
+   * warning rather than blocking the import.
+   */
+  async fetchSchema(collection: string): Promise<LiveSchema> {
+    const uid = `api::${collection}.${collection}`;
+    const body = await this.get<CtbResponse>(`/content-type-builder/content-types/${uid}`);
+    const attributes: Record<string, LiveSchemaAttribute> = {};
+    for (const [name, def] of Object.entries(body.data.schema.attributes)) {
+      attributes[name] = {
+        type: def.type,
+        required: def.required ?? false,
+        localized: def.pluginOptions?.i18n?.localized ?? false,
+      };
+    }
+    return { attributes };
+  }
+
+  private async get<T>(path: string): Promise<T> {
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      headers: { authorization: `Bearer ${this.token}` },
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new ImportError(
+        `GET ${path} failed: ${response.status} ${response.statusText} ${detail}`.trim(),
+      );
+    }
+    return (await response.json()) as T;
   }
 
   private async post<T>(path: string, body: unknown): Promise<T> {

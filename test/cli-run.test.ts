@@ -1,8 +1,25 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import ExcelJS from 'exceljs';
 import { runImport } from '../src/cli/run.js';
 import type { CliDeps } from '../src/cli/run.js';
-import type { StrapiClient, TruncateResult, BulkCreateResult } from '../src/core/strapi-client.js';
+import { buildWorkbook } from './fixtures/in-memory-workbook.js';
+import { EXPECTED, EXPECTED_FACTS } from './integration/fixture.js';
+import type {
+  StrapiClient,
+  TruncateResult,
+  BulkCreateResult,
+  LiveSchema,
+} from '../src/core/strapi-client.js';
 import type { BulkRow } from '../src/core/domain.js';
+import type { ImportResult } from '../src/core/result.js';
+
+/** A workbook that passes all ten pre-flight checks (built from the integration fixture). */
+function validWorkbook(): ExcelJS.Workbook {
+  return buildWorkbook([
+    ...EXPECTED.map((e) => ({ name: e.collection, columns: e.columns, rows: e.rows })),
+    ...EXPECTED_FACTS.map((f) => ({ name: f.collection, columns: f.columns, rows: f.rows })),
+  ]);
+}
 
 class RecordingClient implements StrapiClient {
   calls: string[] = [];
@@ -14,8 +31,8 @@ class RecordingClient implements StrapiClient {
     this.calls.push(`bulkCreate:${collection}`);
     return rows.map((_, i) => ({ rowIndex: i, documentId: `d${i}`, id_en: i + 1 }));
   }
-  fetchSchema(): Promise<never> {
-    throw new Error('unused');
+  async fetchSchema(): Promise<LiveSchema> {
+    return { attributes: {} }; // no required attrs → no schema drift
   }
 }
 
@@ -24,22 +41,26 @@ const goodEnv = { STRAPI_URL: 'http://localhost:3000', STRAPI_TOKEN: 'tok' };
 function deps(overrides: Partial<CliDeps> = {}): CliDeps {
   return {
     fileExists: async () => true,
+    readWorkbook: async () => validWorkbook(),
     parseReferences: async () => [
       { collection: 'specie', rows: [{ en: { name: 'Gallus gallus' } }] },
       { collection: 'matrix', rows: [{ en: { name: 'Chicken meat', iri: 'iri:1' } }] },
     ],
     parseFacts: async () => [],
     makeClient: () => new RecordingClient(),
+    confirm: async () => true,
+    writeResult: async () => {},
+    now: () => '2026-06-01T00:00:00.000Z',
+    isTty: () => false,
     log: () => {},
     error: () => {},
     ...overrides,
   };
 }
 
-describe('runImport', () => {
+describe('runImport — argument and environment guards', () => {
   it('exits 1 when the workbook path argument is missing', async () => {
-    const code = await runImport(undefined, goodEnv, deps());
-    expect(code).toBe(1);
+    expect(await runImport(undefined, goodEnv, deps())).toBe(1);
   });
 
   it('exits 1 when STRAPI_URL or STRAPI_TOKEN is missing', async () => {
@@ -48,60 +69,166 @@ describe('runImport', () => {
   });
 
   it('exits 1 when the workbook file does not exist', async () => {
-    const code = await runImport('missing.xlsx', goodEnv, deps({ fileExists: async () => false }));
-    expect(code).toBe(1);
+    expect(await runImport('missing.xlsx', goodEnv, deps({ fileExists: async () => false }))).toBe(
+      1,
+    );
   });
+});
 
-  it('exits 0 and truncates all reference collections before bulk-creating any', async () => {
+describe('runImport — pre-flight gate', () => {
+  it('exits 2, writes a preflight-failed result, and never touches the DB when pre-flight has errors', async () => {
     const client = new RecordingClient();
-    const code = await runImport('wb.xlsx', goodEnv, deps({ makeClient: () => client }));
+    const results: ImportResult[] = [];
+    // Workbook missing the resistance sheet → check #2 error.
+    const broken = buildWorkbook(
+      EXPECTED.map((e) => ({ name: e.collection, columns: e.columns, rows: e.rows })),
+    );
 
-    expect(code).toBe(0);
-    expect(client.calls).toEqual([
-      'truncate:specie',
-      'truncate:matrix',
-      'bulkCreate:specie',
-      'bulkCreate:matrix',
-    ]);
-  });
-
-  it('exits 2 and leaves the DB untouched when a fact references an unknown name (pre-flight #7)', async () => {
-    const client = new RecordingClient();
-    const errors: string[] = [];
     const code = await runImport(
       'wb.xlsx',
       goodEnv,
       deps({
         makeClient: () => client,
-        error: (m) => errors.push(m),
-        parseFacts: async () => [
-          {
-            collection: 'resistance',
-            rows: [
-              {
-                rowNumber: 2,
-                hasDe: false,
-                scalars: { en: {}, de: {} },
-                relations: [{ attr: 'matrix', collection: 'matrix', en: 'Mystery meat' }],
-              },
-            ],
-          },
-        ],
+        readWorkbook: async () => broken,
+        writeResult: async (r) => {
+          results.push(r);
+        },
       }),
     );
 
     expect(code).toBe(2);
-    expect(client.calls).toEqual([]); // no truncate, no bulk-create
-    expect(errors.some((e) => e.includes("`matrix_en = 'Mystery meat'`"))).toBe(true);
+    expect(client.calls).toEqual([]);
+    expect(results.at(-1)?.outcome).toBe('preflight-failed');
+    expect(results.at(-1)?.preflight.errors.some((f) => f.check === 2)).toBe(true);
   });
+});
 
-  it('imports facts after references, stamping resolved relation IDs', async () => {
+describe('runImport — unreadable workbook (check #1)', () => {
+  it('exits 2 with a check-1 preflight-failed result when the file is not valid xlsx', async () => {
     const client = new RecordingClient();
+    const results: ImportResult[] = [];
     const code = await runImport(
       'wb.xlsx',
       goodEnv,
       deps({
         makeClient: () => client,
+        readWorkbook: async () => {
+          throw new Error('not a zip file');
+        },
+        writeResult: async (r) => {
+          results.push(r);
+        },
+      }),
+    );
+
+    expect(code).toBe(2);
+    expect(client.calls).toEqual([]);
+    expect(results.at(-1)?.outcome).toBe('preflight-failed');
+    expect(results.at(-1)?.preflight.errors.some((f) => f.check === 1)).toBe(true);
+  });
+});
+
+describe('runImport — dry run', () => {
+  it('runs pre-flight, prints a summary, writes a dry-run result, and exits 0 without importing', async () => {
+    const client = new RecordingClient();
+    const results: ImportResult[] = [];
+    const logs: string[] = [];
+
+    const code = await runImport(
+      'wb.xlsx',
+      goodEnv,
+      deps({
+        makeClient: () => client,
+        writeResult: async (r) => {
+          results.push(r);
+        },
+        log: (m) => logs.push(m),
+      }),
+      { dryRun: true },
+    );
+
+    expect(code).toBe(0);
+    expect(client.calls).toEqual([]);
+    expect(results.at(-1)?.outcome).toBe('dry-run');
+    expect(logs.some((l) => /Pre-flight/i.test(l))).toBe(true);
+  });
+});
+
+describe('runImport — confirmation', () => {
+  it('imports without prompting on a non-TTY run', async () => {
+    const client = new RecordingClient();
+    const confirm = vi.fn(async () => true);
+    const code = await runImport(
+      'wb.xlsx',
+      goodEnv,
+      deps({ makeClient: () => client, confirm, isTty: () => false }),
+    );
+
+    expect(code).toBe(0);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(client.calls).toContain('bulkCreate:specie');
+  });
+
+  it('prompts on a TTY and exits 3 with a declined result when the operator says no', async () => {
+    const client = new RecordingClient();
+    const results: ImportResult[] = [];
+    const code = await runImport(
+      'wb.xlsx',
+      goodEnv,
+      deps({
+        makeClient: () => client,
+        isTty: () => true,
+        confirm: async () => false,
+        writeResult: async (r) => {
+          results.push(r);
+        },
+      }),
+    );
+
+    expect(code).toBe(3);
+    expect(client.calls).toEqual([]);
+    expect(results.at(-1)?.outcome).toBe('declined');
+  });
+
+  it('proceeds when the operator confirms on a TTY', async () => {
+    const client = new RecordingClient();
+    const code = await runImport(
+      'wb.xlsx',
+      goodEnv,
+      deps({ makeClient: () => client, isTty: () => true, confirm: async () => true }),
+    );
+    expect(code).toBe(0);
+    expect(client.calls).toContain('truncate:matrix');
+  });
+
+  it('skips the prompt when --yes is passed even on a TTY', async () => {
+    const client = new RecordingClient();
+    const confirm = vi.fn(async () => false);
+    const code = await runImport(
+      'wb.xlsx',
+      goodEnv,
+      deps({ makeClient: () => client, isTty: () => true, confirm }),
+      { yes: true },
+    );
+
+    expect(code).toBe(0);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(client.calls).toContain('bulkCreate:specie');
+  });
+});
+
+describe('runImport — success', () => {
+  it('imports facts after references and writes a success result', async () => {
+    const client = new RecordingClient();
+    const results: ImportResult[] = [];
+    const code = await runImport(
+      'wb.xlsx',
+      goodEnv,
+      deps({
+        makeClient: () => client,
+        writeResult: async (r) => {
+          results.push(r);
+        },
         parseFacts: async () => [
           {
             collection: 'resistance',
@@ -120,35 +247,13 @@ describe('runImport', () => {
 
     expect(code).toBe(0);
     expect(client.calls).toEqual([
-      'truncate:resistance', // fact tables truncated first
+      'truncate:resistance',
       'truncate:specie',
       'truncate:matrix',
       'bulkCreate:specie',
       'bulkCreate:matrix',
-      'bulkCreate:resistance', // facts created last
+      'bulkCreate:resistance',
     ]);
-  });
-
-  it('logs a note naming the spec-ignored columns that were dropped', async () => {
-    const logs: string[] = [];
-    const code = await runImport(
-      'wb.xlsx',
-      goodEnv,
-      deps({
-        log: (m) => logs.push(m),
-        parseFacts: async () => [
-          {
-            collection: 'prevalence',
-            rows: [],
-            droppedColumns: ['matrixDetail_en', 'sampleType_en'],
-          },
-        ],
-      }),
-    );
-
-    expect(code).toBe(0);
-    expect(
-      logs.some((l) => l.includes('ignored non-schema columns') && l.includes('matrixDetail_en')),
-    ).toBe(true);
+    expect(results.at(-1)?.outcome).toBe('success');
   });
 });

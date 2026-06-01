@@ -1,107 +1,100 @@
-import type { Locale } from './relation-map.js';
-import type { CollectionImport } from './orchestrator.js';
-import type { FactImport } from './fact-parser.js';
+import type ExcelJS from 'exceljs';
+import type { CollectionDescriptor } from './descriptors.js';
+import type { LiveSchema } from './strapi-client.js';
+import type { PreflightFinding } from './preflight-checks.js';
+import {
+  checkCellTypes,
+  checkCutoff,
+  checkLocaleCompleteness,
+  checkRelations,
+  checkRequiredColumns,
+  checkRequiredFields,
+  checkSchemaDrift,
+  checkSheetsPresent,
+  checkUnique,
+} from './preflight-checks.js';
 
 /**
- * Pre-flight validation for the import core. This module currently implements
- * check #7 (relation references resolve within the parsed payload); the full
- * ten-check harness and result file land in issue #005. See CONTEXT.md §
- * Pre-flight validation and docs/import-cli-spec/source-xlsx-format.md §5.
+ * Pre-flight orchestrator: composes the ten checks over an already-loaded
+ * workbook, accumulating every finding in a single pass, and reports the result
+ * with a parsed-rows summary. The caller owns check #1 (reading the file) and
+ * decides abort/continue from `ok`. See CONTEXT.md § Pre-flight validation.
  */
 
-/** One relation reference that does not resolve to a parsed reference row. */
-export interface RelationFinding {
-  /** Fact sheet the bad reference is on (e.g. `resistance`). */
-  sheet: string;
-  /** 1-based worksheet row number. */
-  rowNumber: number;
-  /** Offending column (e.g. `matrix_en`). */
-  field: string;
-  /** The value that did not resolve. */
-  value: string;
-  /** Reference sheet the value should have been found in (e.g. `matrix`). */
-  referenceSheet: string;
-  /** Human-readable, single-pass message for the result file. */
-  message: string;
+export interface PreflightSummary {
+  /** Number of expected sheets actually present. */
+  collections: number;
+  /** Data-row count per present collection. */
+  rowsByCollection: Record<string, number>;
+  totalRows: number;
 }
 
-/**
- * The set of `(collection, locale, name)` triples present in the parsed
- * reference sheets. Check #7 verifies every fact relation name appears here,
- * matching locale. Built from the parsed payload — no server round-trip.
- */
-export class ReferenceNameIndex {
-  private readonly keys = new Set<string>();
-
-  add(collection: string, locale: Locale, name: string): void {
-    this.keys.add(key(collection, locale, name));
-  }
-
-  has(collection: string, locale: Locale, name: string): boolean {
-    return this.keys.has(key(collection, locale, name));
-  }
+export interface PreflightReport {
+  /** True when there are no error-level findings (warnings do not block). */
+  ok: boolean;
+  errors: PreflightFinding[];
+  warnings: PreflightFinding[];
+  summary: PreflightSummary;
 }
 
-/** Indexes every reference row's name by collection + locale for check #7. */
-export function buildReferenceNameIndex(references: CollectionImport[]): ReferenceNameIndex {
-  const index = new ReferenceNameIndex();
-  for (const { collection, rows } of references) {
-    for (const row of rows) {
-      index.add(collection, 'en', row.en.name);
-      if (row.de) {
-        index.add(collection, 'de', row.de.name);
+export interface PreflightOptions {
+  /** Supplies the live schema for check #10; omit to skip schema-drift detection. */
+  fetchSchema?: (collection: string) => Promise<LiveSchema>;
+}
+
+export async function runPreflight(
+  workbook: ExcelJS.Workbook,
+  descriptors: CollectionDescriptor[],
+  options: PreflightOptions = {},
+): Promise<PreflightReport> {
+  const findings: PreflightFinding[] = [];
+
+  // Cross-sheet checks.
+  findings.push(...checkSheetsPresent(workbook, descriptors)); // #2
+  findings.push(...checkRelations(workbook, descriptors)); // #7
+  findings.push(...checkCutoff()); // #9 (no-op)
+
+  // Per-sheet checks, only for sheets that are present.
+  const rowsByCollection: Record<string, number> = {};
+  let present = 0;
+  for (const descriptor of descriptors) {
+    const sheet = workbook.getWorksheet(descriptor.collection);
+    if (!sheet) {
+      continue;
+    }
+    present += 1;
+    rowsByCollection[descriptor.collection] = Math.max(0, sheet.rowCount - 1);
+
+    findings.push(...checkRequiredColumns(sheet, descriptor)); // #3
+    findings.push(...checkCellTypes(sheet, descriptor)); // #4
+    findings.push(...checkRequiredFields(sheet, descriptor)); // #5
+    findings.push(...checkUnique(sheet, descriptor)); // #6
+    findings.push(...checkLocaleCompleteness(sheet, descriptor)); // #8
+
+    if (options.fetchSchema) {
+      // #10 — best-effort: an unreachable schema endpoint warns rather than blocks.
+      try {
+        const schema = await options.fetchSchema(descriptor.collection);
+        findings.push(...checkSchemaDrift(sheet, descriptor, schema));
+      } catch (err) {
+        findings.push({
+          check: 10,
+          level: 'warning',
+          sheet: descriptor.collection,
+          message: `schema drift not verified for \`${descriptor.collection}\`: ${(err as Error).message}`,
+        });
       }
     }
   }
-  return index;
-}
 
-/**
- * Check #7: every fact relation reference must resolve to a parsed reference row
- * in the same locale. Accumulates every failure (does not fail fast) so the
- * operator can fix them all in one pass.
- */
-export function checkRelationReferences(
-  facts: FactImport[],
-  index: ReferenceNameIndex,
-): RelationFinding[] {
-  const findings: RelationFinding[] = [];
-  for (const { collection: sheet, rows } of facts) {
-    for (const row of rows) {
-      for (const ref of row.relations) {
-        for (const locale of ['en', 'de'] as const) {
-          const value = ref[locale];
-          if (value !== undefined && !index.has(ref.collection, locale, value)) {
-            findings.push(
-              makeFinding(sheet, row.rowNumber, ref.attr, locale, value, ref.collection),
-            );
-          }
-        }
-      }
-    }
-  }
-  return findings;
-}
+  const errors = findings.filter((f) => f.level === 'error');
+  const warnings = findings.filter((f) => f.level === 'warning');
+  const totalRows = Object.values(rowsByCollection).reduce((sum, n) => sum + n, 0);
 
-function makeFinding(
-  sheet: string,
-  rowNumber: number,
-  attr: string,
-  locale: Locale,
-  value: string,
-  referenceSheet: string,
-): RelationFinding {
-  const field = `${attr}_${locale}`;
   return {
-    sheet,
-    rowNumber,
-    field,
-    value,
-    referenceSheet,
-    message: `Sheet \`${sheet}\` row ${rowNumber}: \`${field} = '${value}'\` not found in ${referenceSheet} sheet`,
+    ok: errors.length === 0,
+    errors,
+    warnings,
+    summary: { collections: present, rowsByCollection, totalRows },
   };
-}
-
-function key(collection: string, locale: Locale, name: string): string {
-  return `${collection} ${locale} ${name}`;
 }

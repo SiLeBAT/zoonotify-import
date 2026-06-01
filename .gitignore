@@ -6,6 +6,9 @@ AGENTS.md
 # misc
 local/
 
+# Import CLI result files
+import-result-*.json
+
 # Logs
 logs
 *.log

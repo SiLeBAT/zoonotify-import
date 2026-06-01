@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { HttpStrapiClient } from '../src/adapters/http-strapi-client.js';
-import { NotImplementedError } from '../src/core/errors.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -14,11 +13,6 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe('HttpStrapiClient', () => {
-  it('fetchSchema throws NotImplementedError (lands in #005)', async () => {
-    const client = new HttpStrapiClient('http://localhost:3000', 'tok');
-    await expect(client.fetchSchema('microorganism')).rejects.toBeInstanceOf(NotImplementedError);
-  });
-
   it('truncate POSTs the collection to /import-admin/truncate with bearer auth', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ en: 3, de: 2 }));
     vi.stubGlobal('fetch', fetchMock);

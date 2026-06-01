@@ -94,4 +94,27 @@ describe.runIf(ENABLED)('full workbook import against a live CMS', () => {
   // NOTE: that each relation name was correctly translated to its locale's Strapi
   // ID is asserted exhaustively by the unit suites (resolve-fact-row, sync-import);
   // here the GETs confirm the rows landed with the right counts and scalars.
+
+  it('--dry-run runs pre-flight, prints the summary, exits 0, and leaves the DB untouched', async () => {
+    // Capture current counts so the assertion is independent of test ordering:
+    // a dry run must not change them, whatever they are.
+    const before = await Promise.all(
+      [...EXPECTED, ...EXPECTED_FACTS].map(async (spec) => ({
+        collection: spec.collection,
+        total: (await listCollection(ADMIN_BASE, jwt, spec.collection, 'en')).pagination.total,
+      })),
+    );
+
+    const { stdout } = await run('npx', ['tsx', 'src/cli/index.ts', '--dry-run', workbookPath], {
+      cwd: repoRoot,
+      env: { ...process.env, STRAPI_URL: `${ADMIN_BASE}/api`, STRAPI_TOKEN: token },
+    });
+    expect(stdout).toMatch(/Pre-flight: parsed/);
+    expect(stdout).toMatch(/Dry run/i);
+
+    for (const { collection, total } of before) {
+      const after = (await listCollection(ADMIN_BASE, jwt, collection, 'en')).pagination.total;
+      expect(after, `${collection} unchanged by dry run`).toBe(total);
+    }
+  }, 120_000);
 });

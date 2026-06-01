@@ -14,6 +14,18 @@ export interface BulkCreateResult {
   id_de?: number;
 }
 
+/** One attribute of a live Strapi content type, normalized for schema-drift detection. */
+export interface LiveSchemaAttribute {
+  type: string;
+  required: boolean;
+  localized: boolean;
+}
+
+/** A live content type's attributes, keyed by attribute name (check #10). */
+export interface LiveSchema {
+  attributes: Record<string, LiveSchemaAttribute>;
+}
+
 /**
  * The port the import core talks to. Its only production implementation is the
  * HTTP adapter; orchestrator unit tests drive a fake. The full eventual surface
@@ -23,5 +35,5 @@ export interface BulkCreateResult {
 export interface StrapiClient {
   truncate(collection: string): Promise<TruncateResult>;
   bulkCreate(collection: string, rows: BulkRow[]): Promise<BulkCreateResult[]>;
-  fetchSchema(collection: string): Promise<unknown>;
+  fetchSchema(collection: string): Promise<LiveSchema>;
 }

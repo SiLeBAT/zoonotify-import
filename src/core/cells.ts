@@ -27,3 +27,14 @@ export function cellValue(row: ExcelJS.Row, col: number): string | undefined {
   const text = String(value).trim();
   return SENTINELS.has(text) ? undefined : text;
 }
+
+/**
+ * Parses a numeric cell string to a number, normalizing a comma decimal
+ * separator to a dot first (source-xlsx-format.md §2). Returns `undefined` when
+ * the text does not parse to a finite number.
+ */
+export function parseNumeric(text: string, type: 'integer' | 'float'): number | undefined {
+  const normalized = text.replace(/,/g, '.');
+  const parsed = type === 'integer' ? parseInt(normalized, 10) : parseFloat(normalized);
+  return Number.isNaN(parsed) ? undefined : parsed;
+}

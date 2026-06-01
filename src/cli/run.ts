@@ -1,11 +1,17 @@
-import { access } from 'node:fs/promises';
+import { access, writeFile } from 'node:fs/promises';
+import { createInterface } from 'node:readline/promises';
+import ExcelJS from 'exceljs';
 import type { CollectionImport } from '../core/orchestrator.js';
 import type { FactImport } from '../core/fact-parser.js';
 import type { StrapiClient } from '../core/strapi-client.js';
+import type { PreflightReport } from '../core/preflight.js';
+import type { ImportResult, ImportOutcome } from '../core/result.js';
 import { parseAllReferences } from '../core/parser.js';
 import { parseAllFacts } from '../core/fact-parser.js';
 import { syncImport } from '../core/orchestrator.js';
-import { buildReferenceNameIndex, checkRelationReferences } from '../core/preflight.js';
+import { runPreflight } from '../core/preflight.js';
+import { describeAllCollections } from '../core/descriptors.js';
+import { buildResult } from '../core/result.js';
 import { HttpStrapiClient } from '../adapters/http-strapi-client.js';
 import { logger } from './logger.js';
 
@@ -14,12 +20,27 @@ export interface CliEnv {
   STRAPI_TOKEN?: string;
 }
 
+export interface RunOptions {
+  /** Run pre-flight only, print the summary, and exit without touching the DB. */
+  dryRun?: boolean;
+  /** Skip the interactive confirmation prompt. */
+  yes?: boolean;
+}
+
 /** Side-effecting collaborators, injected so the control flow is unit-testable. */
 export interface CliDeps {
   fileExists: (path: string) => Promise<boolean>;
+  /** Reads the workbook for pre-flight (check #1). Rejects if the file is not valid xlsx. */
+  readWorkbook: (path: string) => Promise<ExcelJS.Workbook>;
   parseReferences: (path: string) => Promise<CollectionImport[]>;
   parseFacts: (path: string) => Promise<FactImport[]>;
   makeClient: (baseUrl: string, token: string) => StrapiClient;
+  /** Asks the operator to proceed; returns their answer. Only called on a TTY without --yes. */
+  confirm: (prompt: string) => Promise<boolean>;
+  /** Persists the machine-readable result file. */
+  writeResult: (result: ImportResult) => Promise<void>;
+  now: () => string;
+  isTty: () => boolean;
   log: (message: string) => void;
   error: (message: string) => void;
 }
@@ -33,24 +54,44 @@ export const defaultDeps: CliDeps = {
       return false;
     }
   },
+  readWorkbook: async (path) => {
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(path);
+    return workbook;
+  },
   parseReferences: parseAllReferences,
   parseFacts: parseAllFacts,
   makeClient: (baseUrl, token) => new HttpStrapiClient(baseUrl, token),
+  confirm: async (prompt) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      const answer = await rl.question(prompt);
+      return /^y(es)?$/i.test(answer.trim());
+    } finally {
+      rl.close();
+    }
+  },
+  writeResult: async (result) => {
+    const safe = result.timestamp.replace(/[:.]/g, '-');
+    await writeFile(`./import-result-${safe}.json`, JSON.stringify(result, null, 2), 'utf8');
+  },
+  now: () => new Date().toISOString(),
+  isTty: () => Boolean(process.stdout.isTTY),
   log: (message) => logger.info(message),
   error: (message) => logger.error(message),
 };
 
 /**
- * Validates inputs, then imports the whole workbook (reference + fact layers)
- * via syncImport. Pre-flight check #7 (relation references resolve) runs before
- * any destructive work; if it finds unresolved references the database is left
- * untouched. Returns the process exit code: 0 on success, 1 on invalid args /
- * missing env / missing workbook file, 2 on pre-flight failure.
+ * Validates inputs, runs the full ten-check pre-flight, and — unless this is a
+ * dry run or the operator declines — imports the workbook. Exit codes: 0 success
+ * / dry-run, 1 invalid args/env/file, 2 pre-flight failed (DB untouched), 3 the
+ * operator declined at the confirmation prompt. See CONTEXT.md § Pre-flight.
  */
 export async function runImport(
   workbookPath: string | undefined,
   env: CliEnv,
   deps: CliDeps = defaultDeps,
+  options: RunOptions = {},
 ): Promise<number> {
   if (!workbookPath) {
     deps.error('Missing required argument: <workbook.xlsx>');
@@ -65,42 +106,107 @@ export async function runImport(
     return 1;
   }
 
-  const references = await deps.parseReferences(workbookPath);
-  const facts = await deps.parseFacts(workbookPath);
+  const client = deps.makeClient(env.STRAPI_URL, env.STRAPI_TOKEN);
 
-  // Note any spec-ignored columns that were present and dropped (e.g.
-  // prevalence's matrixDetail_*/sampleType_* — no such relations in the schema).
-  for (const fact of facts) {
-    if (fact.droppedColumns && fact.droppedColumns.length > 0) {
-      deps.log(
-        `Sheet ${fact.collection}: ignored non-schema columns ${fact.droppedColumns.join(', ')}.`,
-      );
-    }
+  // Check #1 + the rest of pre-flight. A workbook that won't parse is itself a
+  // pre-flight failure (DB untouched, exit 2).
+  let report: PreflightReport;
+  try {
+    const workbook = await deps.readWorkbook(workbookPath);
+    report = await runPreflight(workbook, describeAllCollections(), {
+      fetchSchema: (collection) => client.fetchSchema(collection),
+    });
+  } catch (err) {
+    deps.error(`Could not read workbook as .xlsx: ${(err as Error).message}`);
+    await writeFailedReadResult(deps, workbookPath, err as Error);
+    return 2;
   }
 
-  // Pre-flight check #7: every fact relation must resolve in the parsed
-  // reference sheets. Runs before any truncate, so a failure leaves the DB alone.
-  const findings = checkRelationReferences(facts, buildReferenceNameIndex(references));
-  if (findings.length > 0) {
-    for (const finding of findings) {
-      deps.error(finding.message);
-    }
+  reportFindings(deps, report);
+
+  if (!report.ok) {
     deps.error(
-      `Pre-flight failed: ${findings.length} unresolved relation reference(s). Database untouched.`,
+      `Pre-flight failed: ${report.errors.length} error(s). Database untouched. See the result file.`,
+    );
+    await deps.writeResult(
+      buildResult({ outcome: 'preflight-failed', timestamp: deps.now(), preflight: report }),
     );
     return 2;
   }
 
-  const client = deps.makeClient(env.STRAPI_URL, env.STRAPI_TOKEN);
-  const report = await syncImport(client, references, facts);
+  deps.log(formatSummary(report));
 
-  for (const sync of [...report.references, ...report.facts]) {
+  if (options.dryRun) {
+    deps.log('Dry run: pre-flight passed; no changes were made.');
+    await deps.writeResult(
+      buildResult({ outcome: 'dry-run', timestamp: deps.now(), preflight: report }),
+    );
+    return 0;
+  }
+
+  // Confirmation: prompt only on an interactive TTY without --yes.
+  if (deps.isTty() && !options.yes) {
+    const proceed = await deps.confirm(`${confirmationText(report)} Proceed? [y/N] `);
+    if (!proceed) {
+      deps.log('Aborted by operator. No changes were made.');
+      await deps.writeResult(
+        buildResult({ outcome: 'declined', timestamp: deps.now(), preflight: report }),
+      );
+      return 3;
+    }
+  }
+
+  const references = await deps.parseReferences(workbookPath);
+  const facts = await deps.parseFacts(workbookPath);
+  const importReport = await syncImport(client, references, facts);
+
+  const collections = [...importReport.references, ...importReport.facts];
+  for (const sync of collections) {
     deps.log(
       `Imported ${sync.collection}: deleted en=${sync.deleted.en} de=${sync.deleted.de}, created ${sync.created}.`,
     );
   }
   deps.log(
-    `Done: ${report.references.length} reference collections, ${report.facts.length} fact collections, ${report.relations.size} relation keys.`,
+    `Done: ${importReport.references.length} reference collections, ${importReport.facts.length} fact collections, ${importReport.relations.size} relation keys.`,
+  );
+  await deps.writeResult(
+    buildResult({ outcome: 'success', timestamp: deps.now(), preflight: report, collections }),
   );
   return 0;
+}
+
+/** Logs every pre-flight error and warning so the operator sees the whole list. */
+function reportFindings(deps: CliDeps, report: PreflightReport): void {
+  for (const finding of report.errors) {
+    deps.error(finding.message);
+  }
+  for (const finding of report.warnings) {
+    deps.log(`warning: ${finding.message}`);
+  }
+}
+
+function formatSummary(report: PreflightReport): string {
+  const { totalRows, collections } = report.summary;
+  return `Pre-flight: parsed ${totalRows} rows across ${collections} collections — ${report.errors.length} error(s), ${report.warnings.length} warning(s).`;
+}
+
+function confirmationText(report: PreflightReport): string {
+  return `${formatSummary(report)} About to DELETE and re-create ${report.summary.collections} collections (take a DB snapshot first).`;
+}
+
+async function writeFailedReadResult(deps: CliDeps, path: string, err: Error): Promise<void> {
+  const outcome: ImportOutcome = 'preflight-failed';
+  const preflight: PreflightReport = {
+    ok: false,
+    errors: [
+      {
+        check: 1,
+        level: 'error',
+        message: `Workbook \`${path}\` is not a valid .xlsx file: ${err.message}`,
+      },
+    ],
+    warnings: [],
+    summary: { collections: 0, rowsByCollection: {}, totalRows: 0 },
+  };
+  await deps.writeResult(buildResult({ outcome, timestamp: deps.now(), preflight }));
 }
