@@ -19,7 +19,7 @@ describe('runPreflight', () => {
 
     expect(report.ok).toBe(true);
     expect(report.errors).toEqual([]);
-    expect(report.summary.collections).toBe(11);
+    expect(report.summary.collections).toBe(12);
     expect(report.summary.rowsByCollection.resistance).toBe(1);
     expect(report.summary.totalRows).toBeGreaterThan(0);
   });

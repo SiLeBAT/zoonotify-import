@@ -10,8 +10,8 @@ import { FACT_COLLECTIONS } from './fact-collections.js';
  * are driven entirely by these descriptors so each check is one small loop over
  * columns rather than a tangle of per-collection special cases.
  *
- * `matrix-detail` (the non-i18n outlier) is deferred to issue #007 and is not
- * described here — consistent with the two registries.
+ * `matrix-detail` is the non-i18n outlier: `localized: false` and its `name`/
+ * `iri` are single (non-localized) columns rather than `_en`/`_de` pairs.
  */
 
 export interface ColumnDescriptor {
@@ -69,10 +69,12 @@ function describeReference(spec: ReferenceCollectionSpec): CollectionDescriptor 
       );
       columns.push(scalarColumn(`${field.attr}_de`, field.attr, 'string', false, false, 'de'));
     } else {
-      columns.push(scalarColumn(field.attr, field.attr, 'string', field.required ?? false, false));
+      // Single (non-localized) column rides the base payload. `name` is still
+      // unique even when unpaired (matrix-detail).
+      columns.push(scalarColumn(field.attr, field.attr, 'string', field.required ?? false, unique));
     }
   }
-  return { collection: spec.collection, localized: true, columns };
+  return { collection: spec.collection, localized: spec.localized ?? true, columns };
 }
 
 function describeFact(spec: FactCollectionSpec): CollectionDescriptor {

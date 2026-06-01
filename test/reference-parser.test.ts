@@ -84,6 +84,29 @@ describe('parseReferenceSheet — matrix (single non-localized iri)', () => {
   });
 });
 
+describe('parseReferenceSheet — matrix-detail (non-i18n, flat name/iri)', () => {
+  it('reads bare name/iri onto the en payload with no de half', async () => {
+    const path = join(dir, 'matrix-detail.xlsx');
+    await writeWorkbook(path, [
+      {
+        name: 'matrix-detail',
+        columns: ['name', 'iri'],
+        rows: [
+          ['Breast meat', 'http://iri/md/breast'],
+          ['Skin', '-'], // sentinel iri → omitted
+        ],
+      },
+    ]);
+
+    const rows = await parseReferenceSheet(path, referenceSpec('matrix-detail'));
+
+    expect(rows).toEqual([
+      { en: { name: 'Breast meat', iri: 'http://iri/md/breast' } },
+      { en: { name: 'Skin' } },
+    ]);
+  });
+});
+
 describe('parseReferenceSheet — structural errors', () => {
   it('throws MissingColumnError naming a paired field column that is absent', async () => {
     const path = join(dir, 'mg-no-iride.xlsx');

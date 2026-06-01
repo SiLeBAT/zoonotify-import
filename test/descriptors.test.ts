@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { describeAllCollections, describeCollection } from '../src/core/descriptors.js';
 
 describe('describeAllCollections', () => {
-  it('describes the 11 xlsx-managed collections the CLI currently owns (matrix-detail deferred)', () => {
+  it('describes all 12 xlsx-managed collections the CLI owns', () => {
     const names = describeAllCollections()
       .map((d) => d.collection)
       .sort();
@@ -10,6 +10,7 @@ describe('describeAllCollections', () => {
       [
         'antimicrobial-substance',
         'matrix',
+        'matrix-detail',
         'matrix-group',
         'microorganism',
         'prevalence',
@@ -21,6 +22,36 @@ describe('describeAllCollections', () => {
         'super-category-sample-origin',
       ].sort(),
     );
+  });
+});
+
+describe('describeCollection — matrix-detail (non-i18n)', () => {
+  it('marks the collection not localized', () => {
+    expect(describeCollection('matrix-detail').localized).toBe(false);
+  });
+
+  it('models name as a single required+unique non-localized column (no _en/_de)', () => {
+    const name = describeCollection('matrix-detail').columns.find((c) => c.attr === 'name');
+    expect(name).toEqual({
+      name: 'name',
+      attr: 'name',
+      type: 'string',
+      required: true,
+      unique: true,
+      isRelation: false,
+    });
+  });
+
+  it('models iri as a single optional non-localized column', () => {
+    const iri = describeCollection('matrix-detail').columns.find((c) => c.attr === 'iri');
+    expect(iri).toEqual({
+      name: 'iri',
+      attr: 'iri',
+      type: 'string',
+      required: false,
+      unique: false,
+      isRelation: false,
+    });
   });
 });
 

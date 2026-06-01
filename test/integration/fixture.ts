@@ -71,6 +71,16 @@ export const EXPECTED: ExpectedCollection[] = [
     sample: { name: 'Poultry', iri: 'http://iri/mg/poultry' },
   },
   {
+    // Non-i18n: bare name/iri, one row per entity, no DE locale. A ?locale=de
+    // query against a non-localized type returns the same rows, so deCount=enCount.
+    collection: 'matrix-detail',
+    columns: ['name', 'iri'],
+    rows: [['Breast meat', 'http://iri/md/breast']],
+    enCount: 1,
+    deCount: 1,
+    sample: { name: 'Breast meat', iri: 'http://iri/md/breast' },
+  },
+  {
     collection: 'sample-type',
     columns: ['name_en', 'name_de', 'iri_en', 'iri_de'],
     rows: [['Caecal content', 'Blinddarminhalt', 'http://iri/st/caecal', 'http://iri/st/blind']],

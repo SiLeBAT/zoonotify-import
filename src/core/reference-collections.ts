@@ -25,6 +25,13 @@ export interface ReferenceCollectionSpec {
   /** Strapi API singular name; also the workbook sheet name. */
   collection: string;
   fields: ReferenceField[];
+  /**
+   * Whether the collection is i18n-localized in Strapi. Defaults to `true`.
+   * Only `matrix-detail` sets this `false`: its sheet has bare `name`/`iri`
+   * columns (no `_en`/`_de`) and bulk-create sends a flat row with no DE-locale
+   * follow-up. See docs/import-cli-spec/source-xlsx-format.md §6.
+   */
+  localized?: boolean;
 }
 
 const NAME_ONLY: ReferenceField[] = [{ attr: 'name', paired: true, required: true }];
@@ -43,6 +50,16 @@ export const REFERENCE_COLLECTIONS: ReferenceCollectionSpec[] = [
     collection: 'matrix',
     fields: [
       { attr: 'name', paired: true, required: true },
+      { attr: 'iri', paired: false },
+    ],
+  },
+  // matrix-detail is the only non-i18n reference collection: bare name/iri, no
+  // locale suffix, one row per entity, no DE-locale follow-up on bulk-create.
+  {
+    collection: 'matrix-detail',
+    localized: false,
+    fields: [
+      { attr: 'name', paired: false, required: true },
       { attr: 'iri', paired: false },
     ],
   },

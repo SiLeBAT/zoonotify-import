@@ -59,6 +59,35 @@ describe('checkSchemaDrift (check #10)', () => {
     ).toEqual([]);
   });
 
+  it('does not false-positive on matrix: localized name + non-localized iri match the live schema', () => {
+    const matrix = describeCollection('matrix');
+    // Live matrix schema as it actually is: name is i18n, iri is a plain string.
+    const live: LiveSchema = {
+      attributes: {
+        name: { type: 'string', required: true, localized: true },
+        iri: { type: 'string', required: false, localized: false },
+      },
+    };
+    const ws = buildWorkbook([
+      { name: 'matrix', columns: ['name_en', 'name_de', 'iri'] },
+    ]).getWorksheet('matrix')!;
+    expect(checkSchemaDrift(ws, matrix, live)).toEqual([]);
+  });
+
+  it('does not false-positive on matrix-detail: non-i18n name/iri match the live schema', () => {
+    const detail = describeCollection('matrix-detail');
+    const live: LiveSchema = {
+      attributes: {
+        name: { type: 'string', required: true, localized: false },
+        iri: { type: 'string', required: false, localized: false },
+      },
+    };
+    const ws = buildWorkbook([{ name: 'matrix-detail', columns: ['name', 'iri'] }]).getWorksheet(
+      'matrix-detail',
+    )!;
+    expect(checkSchemaDrift(ws, detail, live)).toEqual([]);
+  });
+
   it('does not flag optional live-schema fields that are absent from the workbook', () => {
     const withOptional: LiveSchema = {
       attributes: {

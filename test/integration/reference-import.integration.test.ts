@@ -42,7 +42,7 @@ describe.runIf(ENABLED)('full workbook import against a live CMS', () => {
         STRAPI_TOKEN: token,
       },
     });
-    expect(stdout).toMatch(/Done: 9 reference collections, 2 fact collections/);
+    expect(stdout).toMatch(/Done: 10 reference collections, 2 fact collections/);
   }, 240_000);
 
   it('imports every reference collection with the expected per-locale row counts', async () => {
@@ -106,7 +106,7 @@ describe.runIf(ENABLED)('full workbook import against a live CMS', () => {
         env: { ...process.env, STRAPI_URL: `${ADMIN_BASE}/api`, STRAPI_TOKEN: token },
       },
     );
-    expect(stdout).toMatch(/Done: 9 reference collections, 2 fact collections/);
+    expect(stdout).toMatch(/Done: 10 reference collections, 2 fact collections/);
 
     for (const spec of EXPECTED) {
       const en = await listCollection(ADMIN_BASE, jwt, spec.collection, 'en');
