@@ -1,9 +1,13 @@
 # AI
 CLAUDE.md
+AGENTS.md
 .claude/
 
 # misc
 local/
+
+# Import CLI result files
+import-result-*.json
 
 # Logs
 logs
@@ -148,3 +152,4 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+.gitnexus

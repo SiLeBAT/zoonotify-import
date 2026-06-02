@@ -1,0 +1,49 @@
+# Integration stack for the Import CLI: real Postgres + real Strapi CMS (with the
+# Import admin API from issue #001). Brought up by `npm run test:integration`.
+# Secrets here are throwaway test values — never reuse them anywhere real.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: zoonotify
+      POSTGRES_USER: zoonotify
+      POSTGRES_PASSWORD: zoonotify
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U zoonotify -d zoonotify']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  cms:
+    build:
+      # Build the sibling CMS package (monorepo root is three levels up).
+      context: ../../../zoonotify-cms
+      dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      HOST: 0.0.0.0
+      PORT: 1337
+      NODE_ENV: production
+      DATABASE_CLIENT: postgres
+      DATABASE_HOST: db
+      DATABASE_PORT: 5432
+      DATABASE_NAME: zoonotify
+      DATABASE_USERNAME: zoonotify
+      DATABASE_PASSWORD: zoonotify
+      # Throwaway secrets for the test instance only.
+      APP_KEYS: testkey1==,testkey2==
+      API_TOKEN_SALT: integration-api-token-salt
+      ADMIN_JWT_SECRET: integration-admin-jwt-secret
+      TRANSFER_TOKEN_SALT: integration-transfer-token-salt
+      JWT_SECRET: integration-jwt-secret
+      ENCRYPTION_KEY: integration-encryption-key-000000
+    ports:
+      - '1337:1337'
+    healthcheck:
+      test: ['CMD-SHELL', 'node -e "fetch(''http://localhost:1337/_health'').then(r=>process.exit(r.ok||r.status===204?0:1)).catch(()=>process.exit(1))"']
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 60s

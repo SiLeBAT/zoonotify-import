@@ -1,6 +1,6 @@
 {
   "name": "zoonotify-import",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Zoonotify Import CLI — bulk-loads the source workbook into the Zoonotify CMS via the Import admin API.",
   "type": "module",
@@ -14,6 +14,7 @@
     "start": "tsx src/cli/index.ts",
     "test": "vitest --run",
     "test:watch": "vitest",
+    "test:integration": "node test/integration/run.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
@@ -23,6 +24,7 @@
     "commander": "^12.1.0",
     "dotenv": "^16.4.5",
     "exceljs": "^4.4.0",
+    "p-limit": "^6.2.0",
     "pino": "^9.4.0"
   },
   "devDependencies": {
