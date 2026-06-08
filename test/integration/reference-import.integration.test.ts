@@ -6,9 +6,23 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EXPECTED, EXPECTED_FACTS, writeFixtureWorkbook } from './fixture.js';
-import { waitForStrapi, adminJwt, createImportToken, listCollection } from './strapi-admin.js';
+import {
+  waitForStrapi,
+  adminJwt,
+  ensureLocale,
+  createImportToken,
+  listCollection,
+} from './strapi-admin.js';
 
-const run = promisify(execFile);
+const execFileAsync = promisify(execFile);
+// On Windows, `npx` resolves to `npx.cmd`, which execFile can't spawn without a
+// shell (ENOENT). Mirror run.mjs and shell out on win32.
+const run = (
+  cmd: string,
+  args: string[],
+  opts: Parameters<typeof execFileAsync>[2] = {},
+): ReturnType<typeof execFileAsync> =>
+  execFileAsync(cmd, args, { shell: process.platform === 'win32', ...opts });
 
 // Opt-in: this suite needs the docker-compose stack (PG + Strapi) up. It is
 // excluded from the default `npm test` (see vitest.config.ts) and only runs via
@@ -27,6 +41,9 @@ describe.runIf(ENABLED)('full workbook import against a live CMS', () => {
   beforeAll(async () => {
     await waitForStrapi(ADMIN_BASE);
     jwt = await adminJwt(ADMIN_BASE);
+    // A fresh CMS has only the default `en`; the importer writes DE localizations,
+    // so `de` must be registered first (production configures it in the admin panel).
+    await ensureLocale(ADMIN_BASE, jwt, 'de', 'German (de)');
     token = await createImportToken(ADMIN_BASE, jwt);
 
     const dir = await mkdtemp(join(tmpdir(), 'zni-integration-'));
@@ -34,7 +51,7 @@ describe.runIf(ENABLED)('full workbook import against a live CMS', () => {
     await writeFixtureWorkbook(workbookPath);
 
     // Run the real CLI end-to-end against the live CMS.
-    const { stdout } = await run('npx', ['tsx', 'src/cli/index.ts', workbookPath], {
+    const { stdout } = await run('npx', ['tsx', 'src/cli/index.ts', '--insecure', workbookPath], {
       cwd: repoRoot,
       env: {
         ...process.env,
@@ -99,7 +116,17 @@ describe.runIf(ENABLED)('full workbook import against a live CMS', () => {
     // delete-then-recreate result must match the single-batch happy path.
     const { stdout } = await run(
       'npx',
-      ['tsx', 'src/cli/index.ts', '--batch-size', '1', '--concurrency', '2', '-y', workbookPath],
+      [
+        'tsx',
+        'src/cli/index.ts',
+        '--insecure',
+        '--batch-size',
+        '1',
+        '--concurrency',
+        '2',
+        '-y',
+        workbookPath,
+      ],
       {
         cwd: repoRoot,
         env: { ...process.env, STRAPI_URL: `${ADMIN_BASE}/api`, STRAPI_TOKEN: token },
@@ -125,10 +152,14 @@ describe.runIf(ENABLED)('full workbook import against a live CMS', () => {
       })),
     );
 
-    const { stdout } = await run('npx', ['tsx', 'src/cli/index.ts', '--dry-run', workbookPath], {
-      cwd: repoRoot,
-      env: { ...process.env, STRAPI_URL: `${ADMIN_BASE}/api`, STRAPI_TOKEN: token },
-    });
+    const { stdout } = await run(
+      'npx',
+      ['tsx', 'src/cli/index.ts', '--insecure', '--dry-run', workbookPath],
+      {
+        cwd: repoRoot,
+        env: { ...process.env, STRAPI_URL: `${ADMIN_BASE}/api`, STRAPI_TOKEN: token },
+      },
+    );
     expect(stdout).toMatch(/Pre-flight: parsed/);
     expect(stdout).toMatch(/Dry run/i);
 

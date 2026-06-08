@@ -38,7 +38,7 @@ async function main() {
     console.log('[integration] running vitest integration suite…');
     exitCode = await run('npx', ['vitest', 'run', '--config', 'vitest.integration.config.ts'], {
       cwd: repoRoot,
-      env: { ...process.env, RUN_INTEGRATION: '1', STRAPI_URL: 'http://localhost:1337' },
+      env: { ...process.env, RUN_INTEGRATION: '1', STRAPI_URL: 'http://localhost:1338' },
     });
   } finally {
     console.log('[integration] tearing down stack…');

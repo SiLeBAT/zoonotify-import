@@ -58,12 +58,22 @@ export class HttpStrapiClient implements StrapiClient {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
   }
 
-  truncate(collection: string): Promise<TruncateResult> {
-    return this.post<TruncateResult>('/import-admin/truncate', { collection });
+  async truncate(collection: string): Promise<TruncateResult> {
+    // The CMS wraps the payload as `{ collection, deleted }`; unwrap to the port shape.
+    const body = await this.post<{ collection: string; deleted: TruncateResult }>(
+      '/import-admin/truncate',
+      { collection },
+    );
+    return body.deleted;
   }
 
-  bulkCreate(collection: string, rows: BulkRow[]): Promise<BulkCreateResult[]> {
-    return this.post<BulkCreateResult[]>('/import-admin/bulk-create', { collection, rows });
+  async bulkCreate(collection: string, rows: BulkRow[]): Promise<BulkCreateResult[]> {
+    // The CMS wraps the payload as `{ collection, created }`; unwrap to the port shape.
+    const body = await this.post<{ collection: string; created: BulkCreateResult[] }>(
+      '/import-admin/bulk-create',
+      { collection, rows },
+    );
+    return body.created;
   }
 
   /**

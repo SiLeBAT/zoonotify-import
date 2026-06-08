@@ -14,7 +14,10 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 describe('HttpStrapiClient', () => {
   it('truncate POSTs the collection to /import-admin/truncate with bearer auth', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ en: 3, de: 2 }));
+    // The CMS wraps the payload as `{ collection, deleted }`.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ collection: 'microorganism', deleted: { en: 3, de: 2 } }));
     vi.stubGlobal('fetch', fetchMock);
     // Trailing slash on the base URL must be normalized away.
     const client = new HttpStrapiClient('http://localhost:3000/', 'secret-token');
@@ -33,7 +36,10 @@ describe('HttpStrapiClient', () => {
 
   it('bulkCreate POSTs collection + rows and returns the id map in order', async () => {
     const apiResult = [{ rowIndex: 0, documentId: 'doc-0', id_en: 1, id_de: 101 }];
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(apiResult));
+    // The CMS wraps the payload as `{ collection, created }`.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ collection: 'microorganism', created: apiResult }));
     vi.stubGlobal('fetch', fetchMock);
     const client = new HttpStrapiClient('http://localhost:3000', 'tok');
     const rows = [{ en: { name: 'Salmonella spp.' }, de: { name: 'Salmonella spp.' } }];
