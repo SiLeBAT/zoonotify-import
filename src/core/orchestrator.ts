@@ -1,6 +1,5 @@
-import type { AttrValue, BulkRow, LocalizedRow, ParsedFactRow } from './domain.js';
+import type { AttrValue, BulkRow, FactImport, LocalizedRow, ParsedFactRow } from './domain.js';
 import type { StrapiClient, TruncateResult } from './strapi-client.js';
-import type { FactImport } from './fact-parser.js';
 import { RelationMap } from './relation-map.js';
 import { ImportError } from './errors.js';
 import { bulkCreateBatched, DEFAULT_THROUGHPUT } from './throughput.js';

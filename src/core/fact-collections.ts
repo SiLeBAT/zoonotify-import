@@ -1,7 +1,8 @@
 /**
- * Declarative description of the two fact collections the Import CLI parses
- * (`resistance` and `prevalence`). Like reference-collections.ts, the generic
- * fact parser is driven entirely by these specs. Each fact sheet carries:
+ * Declarative description of the two fact collections the Import CLI imports
+ * (`resistance` and `prevalence`): their canonical Strapi attributes, types, and
+ * relations. The normalizer (driven by source-map.ts) maps the raw fact sheets
+ * onto these, and the pre-flight checks read this metadata. Each fact carries:
  *
  * - **scalars** — non-relation attributes. `paired: true` means the sheet has
  *   `<attr>_en`/`<attr>_de` columns (localized, e.g. `zomoProgram`); `paired:

@@ -54,18 +54,17 @@ describe.runIf(ENABLED)('full workbook import against a live CMS', () => {
     }
   });
 
-  it('persists matrix with its single non-localized iri on the en record', async () => {
+  it('persists a reference name on both locales, linked by document (matrix)', async () => {
     const en = await listCollection(ADMIN_BASE, jwt, 'matrix', 'en');
-    const chicken = en.results.find((r) => r.name === 'Chicken meat');
-    expect(chicken).toBeDefined();
-    expect(chicken!.iri).toBe('http://iri/matrix/chicken');
+    const de = await listCollection(ADMIN_BASE, jwt, 'matrix', 'de');
+    expect(en.results.find((r) => r.name === 'Chicken meat')).toBeDefined();
+    expect(de.results.find((r) => r.name === 'Hähnchenfleisch')).toBeDefined();
   });
 
-  it('persists paired iri on both locales for a standard collection', async () => {
-    const en = await listCollection(ADMIN_BASE, jwt, 'matrix-group', 'en');
-    const de = await listCollection(ADMIN_BASE, jwt, 'matrix-group', 'de');
-    expect(en.results.find((r) => r.name === 'Poultry')?.iri).toBe('http://iri/mg/poultry');
-    expect(de.results.find((r) => r.name === 'Geflügel')?.iri).toBe('http://iri/mg/gefluegel');
+  it('harvests matrix-detail from the fact sheets (Breast meat + Skin)', async () => {
+    const en = await listCollection(ADMIN_BASE, jwt, 'matrix-detail', 'en');
+    const names = en.results.map((r) => r.name).sort();
+    expect(names).toEqual(['Breast meat', 'Skin']);
   });
 
   it('imports both fact collections with the expected per-locale row counts', async () => {

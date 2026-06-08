@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { syncImport } from '../src/core/orchestrator.js';
 import type { CollectionImport } from '../src/core/orchestrator.js';
-import type { FactImport } from '../src/core/fact-parser.js';
+import type { FactImport } from '../src/core/domain.js';
 import type { StrapiClient, TruncateResult, BulkCreateResult } from '../src/core/strapi-client.js';
 import type { BulkRow, ParsedFactRow } from '../src/core/domain.js';
 
