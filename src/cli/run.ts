@@ -17,7 +17,7 @@ import { normalizeReferencesFromFile, normalizeFactsFromFile } from '../core/nor
 import { syncImport } from '../core/orchestrator.js';
 import { DEFAULT_THROUGHPUT, defaultRetryDeps } from '../core/throughput.js';
 import type { ThroughputConfig, BatchEvent, RetryDeps } from '../core/throughput.js';
-import { CircuitBreakerError } from '../core/errors.js';
+import { CircuitBreakerError, RequestError } from '../core/errors.js';
 import { runPreflight } from '../core/preflight.js';
 import { buildResult } from '../core/result.js';
 import { HttpStrapiClient } from '../adapters/http-strapi-client.js';
@@ -356,7 +356,7 @@ export async function runImport(
     const failures = collectFailures(batchEvents, err);
     if (err instanceof CircuitBreakerError) {
       deps.error(
-        `Circuit breaker tripped: ${err.message}. The import was aborted mid-run; the database is in a partial state. See the result file and restore from your pre-run snapshot.`,
+        `Circuit breaker tripped: ${err.message}. The import was aborted mid-run; the database is in a partial state. See the result file and restore from your pre-run snapshot.${transportHint(err, baseUrl)}`,
       );
       await persist('circuit-breaker', 5, report, { failures });
       return 5;
@@ -364,7 +364,7 @@ export async function runImport(
     // Any other failure mid-import: the DB may be in a partial state. Report it
     // (exit 4) rather than crashing, so the operator gets a result file to act on.
     deps.error(
-      `Import failed: ${(err as Error).message}. The database may be in a partial state. See the result file and restore from your pre-run snapshot.`,
+      `Import failed: ${(err as Error).message}. The database may be in a partial state. See the result file and restore from your pre-run snapshot.${transportHint(err, baseUrl)}`,
     );
     await persist('import-failed', 4, report, { failures });
     return 4;
@@ -426,6 +426,30 @@ function collectFailures(events: BatchEvent[], err: unknown): ImportFailure[] {
     );
   }
   return failures;
+}
+
+/**
+ * A 404/405 on an import request almost always means STRAPI_URL is aimed at the
+ * wrong path rather than that the import logic failed: the import-admin routes
+ * are content-API routes under `/api`, so pointing at the admin panel (`/admin`,
+ * served as static files behind the reverse proxy → nginx 405) or a bare host
+ * (no route match → 404) fails before reaching the handler. Surface that hint so
+ * the operator fixes the URL instead of restoring a database that was never
+ * touched. Unwraps a `RequestError` carried as the error itself or as a
+ * `CircuitBreakerError`'s `cause`.
+ */
+function transportHint(err: unknown, baseUrl: string): string {
+  const cause = (err as { cause?: unknown }).cause;
+  const requestError =
+    err instanceof RequestError ? err : cause instanceof RequestError ? cause : undefined;
+  if (requestError?.status === 404 || requestError?.status === 405) {
+    return (
+      ` Hint: a ${requestError.status} here usually means STRAPI_URL points at the wrong path —` +
+      ' it must be the content-API base ending in `/api` (e.g. `https://host/cms/api`), not the' +
+      ` admin panel (\`/admin\`) or the bare host. Current STRAPI_URL: ${baseUrl}.`
+    );
+  }
+  return '';
 }
 
 /** Logs every pre-flight error and warning so the operator sees the whole list. */
