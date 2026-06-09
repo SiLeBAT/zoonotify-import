@@ -326,6 +326,30 @@ describe('runImport — import failure (non-circuit-breaker)', () => {
     expect(results.at(-1)?.outcome).toBe('import-failed');
     expect(errors.some((m) => /partial/i.test(m) && /result file/i.test(m))).toBe(true);
   });
+
+  it('appends a STRAPI_URL hint when truncate rejects with a 405 (URL aimed at the wrong path)', async () => {
+    // A 405 from truncate means the request never reached the handler — almost
+    // always STRAPI_URL points at `/admin` (static, proxy 405) or a bare host.
+    class MethodNotAllowedClient extends RecordingClient {
+      override async truncate(collection: string): Promise<TruncateResult> {
+        this.calls.push(`truncate:${collection}`);
+        throw new RequestError('Method Not Allowed', { status: 405 });
+      }
+    }
+    const errors: string[] = [];
+
+    const code = await runImport(
+      'wb.xlsx',
+      goodEnv,
+      deps({ makeClient: () => new MethodNotAllowedClient(), error: (m) => errors.push(m) }),
+    );
+
+    expect(code).toBe(4);
+    const failureLine = errors.find((m) => /Import failed/.test(m)) ?? '';
+    expect(failureLine).toMatch(/STRAPI_URL points at the wrong path/);
+    expect(failureLine).toContain('/api');
+    expect(failureLine).toContain(goodEnv.STRAPI_URL);
+  });
 });
 
 describe('runImport — result file contents', () => {
