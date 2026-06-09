@@ -5,6 +5,8 @@ AGENTS.md
 
 # misc
 local/
+data/
+docs/
 
 # Import CLI result files
 import-result-*.json

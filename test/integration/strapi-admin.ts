@@ -77,6 +77,36 @@ export async function createImportToken(baseUrl: string, jwt: string): Promise<s
   return ((await res.json()) as { data: { accessKey: string } }).data.accessKey;
 }
 
+/**
+ * Ensures a non-default locale (e.g. `de`) exists, via the i18n admin API.
+ * Idempotent: a fresh Strapi seeds only the default `en`, so the Import CLI's
+ * DE localizations would silently land nowhere until `de` is registered — this
+ * mirrors the production CMS, where `de` is configured in the admin panel.
+ */
+export async function ensureLocale(
+  baseUrl: string,
+  jwt: string,
+  code: string,
+  name: string,
+): Promise<void> {
+  const auth = { authorization: `Bearer ${jwt}` };
+  const existing = await fetch(`${baseUrl}/i18n/locales`, { headers: auth });
+  if (!existing.ok) {
+    throw new Error(`i18n locales list failed: ${existing.status} ${await existing.text()}`);
+  }
+  const locales = (await existing.json()) as Array<{ code: string }>;
+  if (locales.some((l) => l.code === code)) return;
+
+  const res = await fetch(`${baseUrl}/i18n/locales`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...auth },
+    body: JSON.stringify({ code, name, isDefault: false }),
+  });
+  if (!res.ok) {
+    throw new Error(`i18n locale create (${code}) failed: ${res.status} ${await res.text()}`);
+  }
+}
+
 interface CmResult {
   results: Array<{ id: number; name?: string; iri?: string; [field: string]: unknown }>;
   pagination: { total: number };

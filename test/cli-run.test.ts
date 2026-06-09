@@ -1,9 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import ExcelJS from 'exceljs';
 import { runImport } from '../src/cli/run.js';
 import type { CliDeps } from '../src/cli/run.js';
-import { buildWorkbook } from './fixtures/in-memory-workbook.js';
-import { EXPECTED, EXPECTED_FACTS } from './integration/fixture.js';
+import { validWorkbook, workbookWith, spec, MASTERDATA, PREV } from './fixtures/valid-3sheet.js';
 import type {
   StrapiClient,
   TruncateResult,
@@ -13,14 +11,6 @@ import type {
 import type { BulkRow } from '../src/core/domain.js';
 import type { ImportResult } from '../src/core/result.js';
 import { RequestError } from '../src/core/errors.js';
-
-/** A workbook that passes all ten pre-flight checks (built from the integration fixture). */
-function validWorkbook(): ExcelJS.Workbook {
-  return buildWorkbook([
-    ...EXPECTED.map((e) => ({ name: e.collection, columns: e.columns, rows: e.rows })),
-    ...EXPECTED_FACTS.map((f) => ({ name: f.collection, columns: f.columns, rows: f.rows })),
-  ]);
-}
 
 class RecordingClient implements StrapiClient {
   calls: string[] = [];
@@ -128,10 +118,8 @@ describe('runImport — pre-flight gate', () => {
   it('exits 2, writes a preflight-failed result, and never touches the DB when pre-flight has errors', async () => {
     const client = new RecordingClient();
     const results: ImportResult[] = [];
-    // Workbook missing the resistance sheet → check #2 error.
-    const broken = buildWorkbook(
-      EXPECTED.map((e) => ({ name: e.collection, columns: e.columns, rows: e.rows })),
-    );
+    // Workbook missing the amr_resrate sheet → check #2 error.
+    const broken = workbookWith(spec(MASTERDATA), spec(PREV));
 
     const code = await runImport(
       'wb.xlsx',

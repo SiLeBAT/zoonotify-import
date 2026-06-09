@@ -1,60 +1,63 @@
 # zoonotify-import
 
-Command-line importer that bulk-loads the Zoonotify source workbook (`ZooNotify_DB.xlsx`)
-into the [Zoonotify CMS](../zoonotify-cms) via its **Import admin API**. As of **v1.0** it is
-feature-complete against the [source workbook spec](../docs/import-cli-spec/source-xlsx-format.md):
-it imports all **12 xlsx-managed collections** (10 reference + 2 fact), runs the full ten-check
-pre-flight, streams inserts with batching/retry/circuit-breaker, and writes a machine-readable
-result file.
+Command-line tool that bulk-loads the Zoonotify surveillance workbook into the
+[Zoonotify CMS](../zoonotify-cms) (Strapi v5) through its dedicated **Import admin API**.
 
-Collections imported:
+It reads the BfR data steward's **native 3-sheet workbook** (`masterdata` + `amr_resrate` +
+`prevalence`), normalizes it into the 12 CMS collections, validates everything in a ten-check
+pre-flight, then **deletes and recreates** those collections with batching, retry, and a circuit
+breaker — writing a machine-readable result file you can inspect or branch on.
 
-- **Reference (10):** `matrix`, `matrix-group`, `matrix-detail`, `sample-type`, `sample-origin`,
-  `super-category-sample-origin`, `sampling-stage`, `specie`, `antimicrobial-substance`,
-  `microorganism`. `matrix-detail` is the only non-i18n collection (flat `name`/`iri`, no
-  `_en`/`_de`).
-- **Fact (2):** `resistance`, `prevalence`.
+> **The import is destructive.** It is delete-then-recreate, not an upsert, and is **not**
+> transactional across collections. Always take a database snapshot before a production run.
 
-Out of scope for v1 (loaded by the legacy bootstrap mechanism): `resistance-table` ("cut-off"),
+The input contract is the **3-sheet format** (ADR 0007). The full column-by-column spec lives in
+[`source-xlsx-format.md`](../docs/import-cli-spec/source-xlsx-format.md) — give that to whoever
+produces the workbook.
+
+---
+
+## What it imports
+
+From **3 source sheets**, the importer derives **12 collections**:
+
+| Source sheet     | Produces                                                                                                                                                                                   |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `masterdata`     | 9 reference collections (`matrix`, `matrix-group`, `microorganism`, `specie`, `antimicrobial-substance`, `sample-type`, `sample-origin`, `super-category-sample-origin`, `sampling-stage`) |
+| `amr_resrate`    | the `resistance` fact collection                                                                                                                                                           |
+| `prevalence`     | the `prevalence` fact collection                                                                                                                                                           |
+| both fact sheets | the `matrix-detail` reference collection (harvested from their inline `Matrixdetail` column)                                                                                               |
+
+Out of scope (loaded by the legacy CMS bootstrap mechanism): `resistance-table` ("cut-off"),
 `controlled-vocabulary`, `salmonella`. See [ADR 0006].
 
-## Architecture
+---
 
-Hexagonal — the import logic is UI-agnostic and talks to Strapi only through a port (see [ADR 0002]).
+## Prerequisites
 
-```
-src/
-  core/                       ImportCore — pure TypeScript, no CLI/HTTP/logger imports
-    domain.ts                 LocalizedRow / LocaleFields / fact-row types
-    reference-collections.ts  declarative spec of the 10 reference collections
-    fact-collections.ts       declarative spec of the 2 fact collections
-    descriptors.ts            flat column descriptors driving every pre-flight check
-    parser.ts / fact-parser.ts  config-driven sheet parsers
-    relation-map.ts           (collection, locale, name) → id map from bulk-create responses
-    preflight.ts / preflight-checks.ts  the ten checks
-    throughput.ts             batching, concurrency, retry, circuit breaker, batch observer
-    orchestrator.ts           truncate-all → create-all phase ordering + relation stamping
-    result.ts                 the result-file schema (buildResult)
-    strapi-client.ts          StrapiClient port (truncate / bulkCreate / fetchSchema)
-    errors.ts                 typed errors
-  adapters/
-    http-strapi-client.ts     native-fetch implementation of the port
-  cli/
-    index.ts                  commander entry point + .env / --config loading
-    run.ts                    validation, transport hardening, wiring, result assembly
-    logger.ts                 pino logger factory (honors --quiet / --no-color)
-```
+You need all of these before the importer can do anything useful:
 
-The `core/` boundary is enforced two ways: a `no-restricted-imports` ESLint rule and a
-dependency-graph unit test (`test/boundary.test.ts`).
+1. **Node 20 LTS** (or newer) and **npm**. Check with `node -v`.
+2. **A reachable Zoonotify CMS** that exposes the **Import admin API** (`/import-admin/truncate`
+   and `/import-admin/bulk-create`) — this ships in `zoonotify-cms`.
+3. **An Import-role API token** from that CMS. It must be tied to the dedicated **Import** Strapi
+   role (API-token only, access limited to the two `/import-admin/*` endpoints). See the
+   [CMS README](../zoonotify-cms). Treat the token as a secret — anyone holding it can wipe and
+   refill the 12 collections.
+4. **The source workbook** in the 3-sheet format (see
+   [`source-xlsx-format.md`](../docs/import-cli-spec/source-xlsx-format.md)). Run `--dry-run` first
+   to confirm it conforms.
 
-## Setup (install)
+Runtime dependencies (installed by `npm ci`, you don't add these by hand): `commander` (CLI),
+`dotenv` (`.env` loading), `exceljs` (xlsx parsing), `p-limit` (concurrency), `pino` (logging).
 
-Requires **Node 20 LTS** (or newer) and npm.
+---
+
+## Install & configure
 
 ```bash
-npm ci
-cp .env.example .env     # then fill in the values
+npm ci                 # install exact dependency versions
+cp .env.example .env   # then edit .env with your values
 ```
 
 `.env`:
@@ -62,39 +65,41 @@ cp .env.example .env     # then fill in the values
 | Variable       | Meaning                                                                      |
 | -------------- | ---------------------------------------------------------------------------- |
 | `STRAPI_URL`   | Base URL of the CMS **including the `/api` REST prefix**, no trailing slash. |
-| `STRAPI_TOKEN` | API token tied to the dedicated **Import** Strapi role (see CMS README).     |
+| `STRAPI_TOKEN` | API token tied to the dedicated **Import** Strapi role.                      |
 
 `STRAPI_URL` **must be `https://`**. A plain `http://` URL is refused unless you pass `--insecure`
 (intended only for local development against `http://localhost:1337/api`). Any trailing slash is
 stripped automatically.
 
-## Run
+---
 
-### Snapshot first (required)
+## Use it
 
-The import is **delete-then-recreate** and is **not** transactional across collections. If it
-fails partway, earlier collections are already replaced and there is **no automatic rollback**
-(see [ADR 0004]). **Take a database snapshot before every production run.**
-
-### Dry-run workflow
-
-Validate the workbook without touching the database:
+### 1. Validate the workbook (dry run — no database changes)
 
 ```bash
 npm start -- --dry-run ./path/to/ZooNotify_DB.xlsx
 ```
 
-This runs all ten pre-flight checks and writes a `dry-run` result file. Fix every error it
-reports, re-run until it passes clean, then do the real import.
+This runs all ten pre-flight checks against the workbook and writes a `dry-run` result file. It
+makes **no** changes. Fix every error it reports (they name the steward's own sheets and columns,
+e.g. `amr_resrate` → `Anzahl getesteter Isolate`), then re-run until it passes clean.
 
-### Production-run workflow
+### 2. Take a database snapshot
+
+There is **no automatic rollback** ([ADR 0004]). If the import fails partway, earlier collections
+are already replaced. Snapshot first, every time.
+
+### 3. Run the import
 
 ```bash
-# 1. Take a DB snapshot.
-# 2. Import (prompts for confirmation on a TTY; --yes to skip):
+# Prompts for confirmation on a TTY; pass --yes to skip the prompt.
 npm start -- ./path/to/ZooNotify_DB.xlsx
-# 3. Inspect the result file (see below). Exit code 0 = success.
 ```
+
+### 4. Inspect the result file
+
+Exit code `0` means success. Read the result JSON (below) to confirm what was replaced.
 
 ### Flags
 
@@ -121,6 +126,8 @@ The `--config` file accepts the same knobs as JSON (camelCase, `requestTimeout` 
 { "batchSize": 100, "concurrency": 2, "requestTimeout": 60, "report": "./out.json" }
 ```
 
+---
+
 ## Exit codes → action
 
 | Code | Meaning                                      | DB state       | Operator action                                                         |
@@ -134,30 +141,32 @@ The `--config` file accepts the same knobs as JSON (camelCase, `requestTimeout` 
 
 ## Result file
 
-Written after every run (default `./import-result-<ISO>.json`). Shape:
+Written after every run (default `./import-result-<ISO>.json`):
 
 ```jsonc
 {
   "outcome": "success", // success | preflight-failed | declined | dry-run | import-failed | circuit-breaker
   "exitCode": 0,
-  "startedAt": "2026-06-01T09:00:00.000Z",
-  "completedAt": "2026-06-01T09:02:11.000Z",
+  "startedAt": "2026-06-05T09:00:00.000Z",
+  "completedAt": "2026-06-05T09:02:11.000Z",
   "sourceFile": { "path": "./ZooNotify_DB.xlsx", "sha256": "…" }, // fingerprint for traceability
   "preflight": {
     "ok": true,
-    "summary": { "collections": 12, "rowsByCollection": { "resistance": 1234 }, "totalRows": 5000 },
+    "summary": {
+      "collections": 12,
+      "rowsByCollection": { "resistance": 9046 },
+      "totalRows": 10110,
+    },
     "errors": [],
-    "warnings": [
-      /* e.g. missing-DE locale skips (check #8) */
-    ],
+    "warnings": [], // e.g. schema-drift endpoint unreachable (check #10)
   },
   "collections": [
     {
-      "collection": "specie",
-      "deleted": { "en": 12, "de": 12 }, // rows truncated per locale
-      "created": 12, // rows inserted
+      "collection": "matrix",
+      "deleted": { "en": 70, "de": 70 }, // rows truncated per locale
+      "created": 70, // rows inserted
       "batches": [
-        { "index": 0, "rows": 12, "outcome": "created", "attempts": 1, "durationMs": 34 },
+        { "index": 0, "rows": 70, "outcome": "created", "attempts": 1, "durationMs": 34 },
       ],
     },
   ],
@@ -165,49 +174,77 @@ Written after every run (default `./import-result-<ISO>.json`). Shape:
 }
 ```
 
-A wrapper script can branch on `outcome`/`exitCode`; the `sha256` lets you prove which workbook
-produced a given run.
+A wrapper script can branch on `outcome` / `exitCode`; the `sha256` proves which workbook produced
+a given run.
+
+---
 
 ## Troubleshooting
 
 - **Exit 1, "Missing STRAPI_URL or STRAPI_TOKEN"** — copy `.env.example` to `.env` and fill it in.
 - **Exit 1, "insecure http://"** — use an `https://` URL, or `--insecure` for local dev only.
-- **Exit 2 with check-10 (schema drift) errors** — the CMS schema gained a required field the
-  exporter doesn't emit; update the workbook (or the CMS). A schema endpoint that's unreachable
-  downgrades to a _warning_, not a block.
-- **Exit 2 with check-7 (relation) errors** — a fact row references a reference name absent from
-  its sheet (same locale). Fix the name or add the reference row.
-- **Exit 4 / 5 (partial DB)** — restore from the snapshot before re-running. Read `failures[]`
-  for the failing collection/batch; exit 5 specifically means the CMS kept failing batches.
-- **Slow / timing out** — lower `--batch-size`, raise `--request-timeout`, and watch `--verbose`.
+- **Exit 2, check #2/#3 (missing sheet/column)** — the workbook isn't in the 3-sheet format. It
+  must have exactly `masterdata`, `amr_resrate`, `prevalence` with the columns in
+  [`source-xlsx-format.md`](../docs/import-cli-spec/source-xlsx-format.md).
+- **Exit 2, check #7 (relation)** — a fact row references a name that isn't in `masterdata` (same
+  locale). Add the name to `masterdata` or fix the typo.
+- **Exit 2, check #8 (locale)** — a row is missing one of its `_en` / `_de` halves. Both locales
+  are mandatory; duplicate the value if a term is genuinely untranslated.
+- **Exit 2, check #10 (schema drift)** — the CMS gained a required field the importer doesn't
+  provide. An unreachable schema endpoint downgrades to a _warning_, not a block.
+- **Exit 4 / 5 (partial DB)** — restore the snapshot before re-running. Read `failures[]`; exit 5
+  means the CMS kept failing batches (likely unhealthy).
+- **Slow / timing out** — lower `--batch-size`, raise `--request-timeout`, watch `--verbose`.
 
 See the [ops runbook](./docs/runbook.md) for step-by-step incident handling.
 
-## Develop
+---
+
+## For contributors
+
+Hexagonal architecture ([ADR 0002]): the import logic is UI-agnostic and talks to Strapi only
+through a port.
+
+```
+src/
+  core/                     ImportCore — pure TypeScript, no CLI/HTTP/logger imports
+    source-map.ts           the explicit per-field map: canonical attribute → source column(s)
+    normalizer.ts           reads the 3 sheets → canonical in-memory model (refs + facts)
+    fact-collections.ts     declarative attrs/types/relations of the 2 fact collections
+    domain.ts               LocalizedRow / fact-row / FactImport types
+    relation-map.ts         (collection, locale, name) → id map from bulk-create responses
+    preflight.ts            two-layer pre-flight orchestrator
+    preflight-checks.ts     the ten checks (structural on raw sheets, semantic on the model)
+    throughput.ts           batching, concurrency, retry, circuit breaker
+    orchestrator.ts         truncate-all → create-all phase ordering + relation stamping
+    result.ts               the result-file schema
+    strapi-client.ts        StrapiClient port (truncate / bulkCreate / fetchSchema)
+  adapters/
+    http-strapi-client.ts   native-fetch implementation of the port
+  cli/                      commander entry point, wiring, pino logger
+```
 
 ```bash
-npm test          # vitest --run
-npm run test:watch
-npm run lint      # eslint
+npm test          # vitest --run (unit suite)
 npm run typecheck # tsc --noEmit
+npm run lint      # eslint
 npm run format    # prettier --write
 ```
 
-A **husky** pre-commit hook runs `lint-staged` (ESLint + Prettier on staged files) and the full
-`vitest --run` suite before a commit is allowed.
+A husky pre-commit hook runs `lint-staged` (ESLint + Prettier on staged files) and the full unit
+suite before a commit is allowed.
 
-## Integration test
+### Integration test
 
 `test/integration/` brings up real Postgres + the real Strapi CMS via docker-compose, provisions a
-custom Import token, runs the CLI against a generated fixture workbook, and asserts the resulting
-DB state through the content-manager API.
+custom Import token, runs the CLI against a generated 3-sheet fixture, and asserts the resulting DB
+state through the content-manager API.
 
 ```bash
 npm run test:integration   # requires Docker; builds the CMS image, slow on first run
 ```
 
 It is excluded from the default `npm test` and only runs when the runner sets `RUN_INTEGRATION=1`.
-CI runs it as a separate job (`.github/workflows/ci.yml`).
 
 [ADR 0002]: ../docs/import-cli-spec/adr/0002-hexagonal-core-cli-as-adapter.md
 [ADR 0004]: ../docs/import-cli-spec/adr/0004-per-collection-atomicity-no-rollback.md

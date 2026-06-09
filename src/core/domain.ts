@@ -64,3 +64,11 @@ export interface ParsedFactRow {
   };
   relations: FactRelationRef[];
 }
+
+/** One fact collection's parsed rows, ready for relation resolution + import. */
+export interface FactImport {
+  collection: string;
+  rows: ParsedFactRow[];
+  /** Source columns present but not mapped to the schema, kept for logging. */
+  droppedColumns?: string[];
+}

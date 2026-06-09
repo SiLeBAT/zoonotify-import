@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { syncImport } from '../src/core/orchestrator.js';
 import type { CollectionImport } from '../src/core/orchestrator.js';
-import type { FactImport } from '../src/core/fact-parser.js';
+import type { FactImport } from '../src/core/domain.js';
 import { DEFAULT_THROUGHPUT } from '../src/core/throughput.js';
 import type { ThroughputConfig } from '../src/core/throughput.js';
 import type { ParsedFactRow } from '../src/core/domain.js';

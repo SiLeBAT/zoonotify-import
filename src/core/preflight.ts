@@ -1,30 +1,33 @@
 import type ExcelJS from 'exceljs';
-import type { CollectionDescriptor } from './descriptors.js';
 import type { LiveSchema } from './strapi-client.js';
 import type { PreflightFinding } from './preflight-checks.js';
+import { normalizeReferences, normalizeFacts } from './normalizer.js';
 import {
   checkCellTypes,
   checkCutoff,
-  checkLocaleCompleteness,
+  checkFactLocales,
+  checkReferenceLocales,
   checkRelations,
   checkRequiredColumns,
   checkRequiredFields,
   checkSchemaDrift,
   checkSheetsPresent,
   checkUnique,
+  knownAttrs,
 } from './preflight-checks.js';
 
 /**
- * Pre-flight orchestrator: composes the ten checks over an already-loaded
- * workbook, accumulating every finding in a single pass, and reports the result
- * with a parsed-rows summary. The caller owns check #1 (reading the file) and
- * decides abort/continue from `ok`. See CONTEXT.md § Pre-flight validation.
+ * Pre-flight orchestrator for the 3-sheet contract (ADR 0007). Normalizes the
+ * workbook once, then composes the two check layers over a single pass:
+ * structural checks read the raw sheets, semantic checks read the normalized
+ * model. The caller owns check #1 (reading the file) and decides abort/continue
+ * from `ok`. See CONTEXT.md § Pre-flight validation.
  */
 
 export interface PreflightSummary {
-  /** Number of expected sheets actually present. */
+  /** Number of (normalized) collections the import will replace. */
   collections: number;
-  /** Data-row count per present collection. */
+  /** Data-row count per normalized collection. */
   rowsByCollection: Record<string, number>;
   totalRows: number;
 }
@@ -44,44 +47,38 @@ export interface PreflightOptions {
 
 export async function runPreflight(
   workbook: ExcelJS.Workbook,
-  descriptors: CollectionDescriptor[],
   options: PreflightOptions = {},
 ): Promise<PreflightReport> {
+  const references = normalizeReferences(workbook);
+  const facts = normalizeFacts(workbook);
+
   const findings: PreflightFinding[] = [];
 
-  // Cross-sheet checks.
-  findings.push(...checkSheetsPresent(workbook, descriptors)); // #2
-  findings.push(...checkRelations(workbook, descriptors)); // #7
+  // Structural layer — raw sheets.
+  findings.push(...checkSheetsPresent(workbook)); // #2
+  findings.push(...checkRequiredColumns(workbook)); // #3
+  findings.push(...checkCellTypes(workbook)); // #4
+
+  // Semantic layer — normalized model.
+  findings.push(...checkRequiredFields(facts)); // #5
+  findings.push(...checkUnique(facts)); // #6
+  findings.push(...checkRelations(references, facts)); // #7
+  findings.push(...checkReferenceLocales(workbook)); // #8 (references)
+  findings.push(...checkFactLocales(facts)); // #8 (facts)
   findings.push(...checkCutoff()); // #9 (no-op)
 
-  // Per-sheet checks, only for sheets that are present.
-  const rowsByCollection: Record<string, number> = {};
-  let present = 0;
-  for (const descriptor of descriptors) {
-    const sheet = workbook.getWorksheet(descriptor.collection);
-    if (!sheet) {
-      continue;
-    }
-    present += 1;
-    rowsByCollection[descriptor.collection] = Math.max(0, sheet.rowCount - 1);
-
-    findings.push(...checkRequiredColumns(sheet, descriptor)); // #3
-    findings.push(...checkCellTypes(sheet, descriptor)); // #4
-    findings.push(...checkRequiredFields(sheet, descriptor)); // #5
-    findings.push(...checkUnique(sheet, descriptor)); // #6
-    findings.push(...checkLocaleCompleteness(sheet, descriptor)); // #8
-
-    if (options.fetchSchema) {
-      // #10 — best-effort: an unreachable schema endpoint warns rather than blocks.
+  // #10 — schema drift, best-effort: an unreachable endpoint warns, not blocks.
+  if (options.fetchSchema) {
+    for (const { collection } of [...references, ...facts]) {
       try {
-        const schema = await options.fetchSchema(descriptor.collection);
-        findings.push(...checkSchemaDrift(sheet, descriptor, schema));
+        const schema = await options.fetchSchema(collection);
+        findings.push(...checkSchemaDrift(collection, schema, knownAttrs(collection)));
       } catch (err) {
         findings.push({
           check: 10,
           level: 'warning',
-          sheet: descriptor.collection,
-          message: `schema drift not verified for \`${descriptor.collection}\`: ${(err as Error).message}`,
+          sheet: collection,
+          message: `schema drift not verified for \`${collection}\`: ${(err as Error).message}`,
         });
       }
     }
@@ -89,12 +86,17 @@ export async function runPreflight(
 
   const errors = findings.filter((f) => f.level === 'error');
   const warnings = findings.filter((f) => f.level === 'warning');
+
+  const rowsByCollection: Record<string, number> = {};
+  for (const { collection, rows } of [...references, ...facts]) {
+    rowsByCollection[collection] = rows.length;
+  }
   const totalRows = Object.values(rowsByCollection).reduce((sum, n) => sum + n, 0);
 
   return {
     ok: errors.length === 0,
     errors,
     warnings,
-    summary: { collections: present, rowsByCollection, totalRows },
+    summary: { collections: references.length + facts.length, rowsByCollection, totalRows },
   };
 }

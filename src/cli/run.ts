@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { createInterface } from 'node:readline/promises';
 import ExcelJS from 'exceljs';
 import type { CollectionImport, SyncReport } from '../core/orchestrator.js';
-import type { FactImport } from '../core/fact-parser.js';
+import type { FactImport } from '../core/domain.js';
 import type { StrapiClient } from '../core/strapi-client.js';
 import type { PreflightReport } from '../core/preflight.js';
 import type {
@@ -13,14 +13,12 @@ import type {
   ImportFailure,
   SourceFileInfo,
 } from '../core/result.js';
-import { parseAllReferences } from '../core/parser.js';
-import { parseAllFacts } from '../core/fact-parser.js';
+import { normalizeReferencesFromFile, normalizeFactsFromFile } from '../core/normalizer.js';
 import { syncImport } from '../core/orchestrator.js';
 import { DEFAULT_THROUGHPUT, defaultRetryDeps } from '../core/throughput.js';
 import type { ThroughputConfig, BatchEvent, RetryDeps } from '../core/throughput.js';
 import { CircuitBreakerError } from '../core/errors.js';
 import { runPreflight } from '../core/preflight.js';
-import { describeAllCollections } from '../core/descriptors.js';
 import { buildResult } from '../core/result.js';
 import { HttpStrapiClient } from '../adapters/http-strapi-client.js';
 import { logger } from './logger.js';
@@ -199,8 +197,8 @@ export const defaultDeps: CliDeps = {
     createHash('sha256')
       .update(await readFile(path))
       .digest('hex'),
-  parseReferences: parseAllReferences,
-  parseFacts: parseAllFacts,
+  parseReferences: normalizeReferencesFromFile,
+  parseFacts: normalizeFactsFromFile,
   makeClient: (baseUrl, token, requestTimeoutMs) =>
     new HttpStrapiClient(baseUrl, token, requestTimeoutMs),
   confirm: async (prompt) => {
@@ -299,7 +297,7 @@ export async function runImport(
   let report: PreflightReport;
   try {
     const workbook = await deps.readWorkbook(workbookPath);
-    report = await runPreflight(workbook, describeAllCollections(), {
+    report = await runPreflight(workbook, {
       fetchSchema: (collection) => client.fetchSchema(collection),
     });
   } catch (err) {
