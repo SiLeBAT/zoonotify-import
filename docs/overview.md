@@ -47,6 +47,6 @@ Full usage, flags, and the ops runbook live in the import CLI's
 
 ## More
 
-- Each sub-package has its own `README.md` and `CLAUDE.md` with detailed setup and conventions.
+- Each sub-package has its own `README.md` with detailed setup and conventions.
 - Import domain language and decisions: [`CONTEXT.md`](../../CONTEXT.md) and
   [`docs/import-cli-spec/`](../../docs/import-cli-spec).
