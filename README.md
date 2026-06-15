@@ -37,7 +37,8 @@ Out of scope (loaded by the legacy CMS bootstrap mechanism): `resistance-table` 
 
 You need all of these before the importer can do anything useful:
 
-1. **Node 20 LTS** (or newer) and **npm**. Check with `node -v`.
+1. **Node 20 LTS** (or newer). Check with `node -v`. (`npm` is only needed if you
+   build from source rather than downloading the release artifact — see below.)
 2. **A reachable Zoonotify CMS** that exposes the **Import admin API** (`/import-admin/truncate`
    and `/import-admin/bulk-create`) — this ships in `zoonotify-cms`.
 3. **An Import-role API token** from that CMS. It must be tied to the dedicated **Import** Strapi
@@ -53,10 +54,48 @@ Runtime dependencies (installed by `npm ci`, you don't add these by hand): `comm
 
 ---
 
-## Install & configure
+## Get the importer
+
+There are two ways to obtain a runnable importer. **Operators should use option A** —
+it needs nothing but Node.
+
+### A. Download the release artifact (no `npm install`)
+
+Each tagged release ships a single self-contained file, `zoonotify-import.mjs`, with every
+dependency bundled in. Download it (and optionally its `.sha256`) from the repository's
+[Releases](../../releases) page, then run it directly with Node 20+:
 
 ```bash
-npm ci                 # install exact dependency versions
+node zoonotify-import.mjs --help
+```
+
+No `npm install`, no `node_modules`, one file. (It is an `.mjs` ES module on purpose — a
+standalone download has no `package.json`, so the extension is what tells Node to load it as
+a module.) Verify the download if you grabbed the checksum:
+
+```bash
+sha256sum -c zoonotify-import.mjs.sha256
+```
+
+Everywhere this README says `npm start -- …`, the released artifact is `node zoonotify-import.mjs …`.
+
+### B. From source (for contributors)
+
+```bash
+npm ci                  # install exact dependency versions
+npm run build           # produces dist/zoonotify-import.mjs (the release artifact)
+```
+
+Run from source with `npm start -- …`, or build the bundle and run `node dist/zoonotify-import.mjs …`.
+
+---
+
+## Configure
+
+Both options read configuration the same way: from a `.env` file in the **current working
+directory** (or from real environment variables). Copy the template and fill it in:
+
+```bash
 cp .env.example .env   # then edit .env with your values
 ```
 
@@ -229,7 +268,16 @@ npm test          # vitest --run (unit suite)
 npm run typecheck # tsc --noEmit
 npm run lint      # eslint
 npm run format    # prettier --write
+npm run build     # esbuild → single-file dist/zoonotify-import.mjs (the release artifact)
 ```
+
+### Release artifact
+
+`npm run build` (driven by `scripts/build.mjs`) bundles the CLI and every runtime dependency
+into one self-contained ES module at `dist/zoonotify-import.mjs`. CI builds and attaches it to a
+GitHub Release automatically when a `v*` tag is pushed (`.github/workflows/release.yml`). The
+logger attaches `pino-pretty` as a direct stream rather than a worker-thread transport precisely
+so the bundle stays a single file.
 
 A husky pre-commit hook runs `lint-staged` (ESLint + Prettier on staged files) and the full unit
 suite before a commit is allowed.
