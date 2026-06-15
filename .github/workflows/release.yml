@@ -1,0 +1,37 @@
+name: Release
+
+# Builds the single-file bundle and attaches it to a GitHub Release whenever a
+# version tag is pushed, e.g. `git tag v1.0.0 && git push origin v1.0.0`.
+# Operators then download `zoonotify-import.mjs` from the release and run it with
+# Node 20+ — no `npm install`, no node_modules.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Generate checksum
+        working-directory: dist
+        run: sha256sum zoonotify-import.mjs > zoonotify-import.mjs.sha256
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/zoonotify-import.mjs \
+            dist/zoonotify-import.mjs.sha256 \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
