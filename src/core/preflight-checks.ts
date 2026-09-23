@@ -1,6 +1,6 @@
 import type ExcelJS from 'exceljs';
 import type { CollectionImport } from './orchestrator.js';
-import type { FactImport } from './domain.js';
+import type { FactImport, ParsedFactRow } from './domain.js';
 import type { LiveSchema } from './strapi-client.js';
 import { cellValue, parseNumeric, readHeader } from './cells.js';
 import {
@@ -42,8 +42,8 @@ export interface PreflightFinding {
   message: string;
 }
 
-/** The three sheets the 3-sheet contract requires. */
-export const REQUIRED_SHEETS = ['masterdata', 'amr_resrate', 'prevalence'] as const;
+/** The four sheets the source workbook contract requires (ADR 0007, ADR 0008). */
+export const REQUIRED_SHEETS = ['masterdata', 'amr_resrate', 'prevalence', 'multires'] as const;
 
 // ---------------------------------------------------------------------------
 // Raw structural expectations, derived from the source map.
@@ -53,6 +53,8 @@ interface RawSheetSpec {
   sheet: string;
   requiredColumns: string[];
   numericColumns: { column: string; type: 'integer' | 'float' }[];
+  /** Label columns whose values must appear in their code table. */
+  codedColumns: { column: string; codes: Readonly<Record<string, number>> }[];
 }
 
 /** Per-source-sheet required columns and numeric columns, derived from the source map. */
@@ -61,17 +63,23 @@ function rawSheetSpecs(): RawSheetSpec[] {
     sheet: 'masterdata',
     requiredColumns: MASTERDATA_REFERENCES.flatMap((p) => [p.de, p.en]),
     numericColumns: [],
+    codedColumns: [],
   };
   const facts = FACT_SOURCES.map((src) => ({
     sheet: src.sheet,
     requiredColumns: [
-      ...src.scalars.map((s) => s.column),
-      ...src.relations.flatMap((r) => [r.de, r.en]),
-      MATRIX_DETAIL_SOURCE.column,
+      ...new Set([
+        ...src.scalars.map((s) => s.column),
+        ...src.relations.flatMap((r) => [r.de, r.en]),
+        MATRIX_DETAIL_SOURCE.column,
+      ]),
     ],
     numericColumns: src.scalars
-      .filter((s) => s.type !== 'string')
+      .filter((s) => s.type !== 'string' && !s.codes)
       .map((s) => ({ column: s.column, type: s.type as 'integer' | 'float' })),
+    codedColumns: src.scalars.flatMap((s) =>
+      s.codes ? [{ column: s.column, codes: s.codes }] : [],
+    ),
   }));
   return [masterdata, ...facts];
 }
@@ -103,7 +111,7 @@ function* dataRows(sheet: ExcelJS.Worksheet): Generator<RowView> {
 // Structural checks (raw sheets).
 // ---------------------------------------------------------------------------
 
-/** Check #2 — the three required source sheets are present. */
+/** Check #2 — the four required source sheets are present. */
 export function checkSheetsPresent(workbook: ExcelJS.Workbook): PreflightFinding[] {
   const findings: PreflightFinding[] = [];
   for (const sheet of REQUIRED_SHEETS) {
@@ -143,12 +151,12 @@ export function checkRequiredColumns(workbook: ExcelJS.Workbook): PreflightFindi
   return findings;
 }
 
-/** Check #4 — every numeric source cell parses to its declared type. */
+/** Check #4 — every numeric source cell parses to its declared type; every label is known. */
 export function checkCellTypes(workbook: ExcelJS.Workbook): PreflightFinding[] {
   const findings: PreflightFinding[] = [];
   for (const spec of rawSheetSpecs()) {
     const sheet = workbook.getWorksheet(spec.sheet);
-    if (!sheet || spec.numericColumns.length === 0) {
+    if (!sheet || spec.numericColumns.length + spec.codedColumns.length === 0) {
       continue;
     }
     for (const row of dataRows(sheet)) {
@@ -163,6 +171,24 @@ export function checkCellTypes(workbook: ExcelJS.Workbook): PreflightFinding[] {
             field: column,
             value: raw,
             message: `Sheet \`${spec.sheet}\` row ${row.rowNumber}: \`${column} = '${raw}'\` is not a valid ${type}`,
+          });
+        }
+      }
+      for (const { column, codes } of spec.codedColumns) {
+        const raw = row.value(column);
+        if (raw !== undefined && codes[raw] === undefined) {
+          findings.push({
+            check: 4,
+            level: 'error',
+            sheet: spec.sheet,
+            row: row.rowNumber,
+            field: column,
+            value: raw,
+            message: `Sheet \`${spec.sheet}\` row ${row.rowNumber}: \`${column} = '${raw}'\` is not a known label (expected one of ${Object.keys(
+              codes,
+            )
+              .map((k) => `'${k}'`)
+              .join(', ')})`,
           });
         }
       }
@@ -218,34 +244,108 @@ export function checkRequiredFields(facts: FactImport[]): PreflightFinding[] {
   return findings;
 }
 
-/** Check #6 — `dbId` is unique within a fact collection (the only unique fact field). */
+/** Check #6 — every scalar flagged `unique` has no duplicates within its fact collection. */
 export function checkUnique(facts: FactImport[]): PreflightFinding[] {
   const findings: PreflightFinding[] = [];
   for (const { collection, rows } of facts) {
-    if (!factSpec(collection).scalars.some((s) => s.attr === 'dbId')) {
+    const src = factSource(collection);
+    for (const field of factSpec(collection).scalars.filter((s) => s.unique)) {
+      const column = scalarColumn(src, field.attr);
+      const seen = new Set<string>();
+      for (const row of rows) {
+        const value = row.scalars.en[field.attr];
+        if (value === undefined) {
+          continue; // emptiness is check #5's concern
+        }
+        const key = String(value);
+        if (seen.has(key)) {
+          findings.push({
+            check: 6,
+            level: 'error',
+            sheet: src.sheet,
+            row: row.rowNumber,
+            field: column,
+            value: key,
+            message: `Sheet \`${src.sheet}\` row ${row.rowNumber}: duplicate \`${column} = '${key}'\` (must be unique)`,
+          });
+        } else {
+          seen.add(key);
+        }
+      }
+    }
+  }
+  findings.push(...checkUniqueKeys(facts));
+  findings.push(...checkConsistent(facts));
+  return findings;
+}
+
+/** The EN value of a scalar or relation attribute on a normalized row. */
+function enValue(row: ParsedFactRow, attr: string): string {
+  const scalar = row.scalars.en[attr];
+  if (scalar !== undefined) {
+    return String(scalar);
+  }
+  return row.relations.find((r) => r.attr === attr)?.en ?? '';
+}
+
+/** Check #6 (composite) — at most one row per `uniqueKey` tuple. */
+function checkUniqueKeys(facts: FactImport[]): PreflightFinding[] {
+  const findings: PreflightFinding[] = [];
+  for (const { collection, rows } of facts) {
+    const keyAttrs = factSpec(collection).uniqueKey;
+    if (!keyAttrs) {
       continue;
     }
     const src = factSource(collection);
-    const column = scalarColumn(src, 'dbId');
-    const seen = new Set<string>();
+    const firstRow = new Map<string, number>();
     for (const row of rows) {
-      const value = row.scalars.en.dbId;
-      if (value === undefined) {
-        continue; // emptiness is check #5's concern
+      const key = keyAttrs.map((attr) => enValue(row, attr)).join(' | ');
+      const first = firstRow.get(key);
+      if (first === undefined) {
+        firstRow.set(key, row.rowNumber);
+        continue;
       }
-      const key = String(value);
-      if (seen.has(key)) {
-        findings.push({
-          check: 6,
-          level: 'error',
-          sheet: src.sheet,
-          row: row.rowNumber,
-          field: column,
-          value: key,
-          message: `Sheet \`${src.sheet}\` row ${row.rowNumber}: duplicate \`${column} = '${key}'\` (must be unique)`,
-        });
-      } else {
-        seen.add(key);
+      findings.push({
+        check: 6,
+        level: 'error',
+        sheet: src.sheet,
+        row: row.rowNumber,
+        value: key,
+        message: `Sheet \`${src.sheet}\` row ${row.rowNumber}: duplicates row ${first} on (${keyAttrs.join(', ')}) = (${key}); at most one row is allowed`,
+      });
+    }
+  }
+  return findings;
+}
+
+/** Check #6 (consistency) — an attribute holds one value across rows sharing a key. */
+function checkConsistent(facts: FactImport[]): PreflightFinding[] {
+  const findings: PreflightFinding[] = [];
+  for (const { collection, rows } of facts) {
+    const src = factSource(collection);
+    for (const { attr, across } of factSpec(collection).consistent ?? []) {
+      const column = scalarColumn(src, attr);
+      const first = new Map<string, { row: number; value: string }>();
+      for (const row of rows) {
+        const value = row.scalars.en[attr];
+        if (value === undefined) {
+          continue; // emptiness is check #5's concern
+        }
+        const key = across.map((a) => enValue(row, a)).join(' | ');
+        const seen = first.get(key);
+        if (seen === undefined) {
+          first.set(key, { row: row.rowNumber, value: String(value) });
+        } else if (seen.value !== String(value)) {
+          findings.push({
+            check: 6,
+            level: 'error',
+            sheet: src.sheet,
+            row: row.rowNumber,
+            field: column,
+            value: String(value),
+            message: `Sheet \`${src.sheet}\` row ${row.rowNumber}: \`${column} = '${value}'\` differs from row ${seen.row} ('${seen.value}') for the same (${across.join(', ')}) = (${key})`,
+          });
+        }
       }
     }
   }
@@ -355,6 +455,9 @@ export function checkFactLocales(facts: FactImport[]): PreflightFinding[] {
     const src = factSource(collection);
     for (const row of rows) {
       for (const ref of row.relations) {
+        if (ref.shared) {
+          continue; // one name for both locales
+        }
         const enPresent = ref.en !== undefined;
         const dePresent = ref.de !== undefined;
         if (enPresent === dePresent) {

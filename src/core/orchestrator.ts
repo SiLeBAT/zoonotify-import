@@ -139,7 +139,8 @@ export async function syncImport(
 /**
  * Translate one parsed fact row into the `{ en, de? }` payload the bulk-create
  * port expects, stamping each relation with its integer ID from the relation
- * map. Relations whose locale name is absent are omitted (not nulled). The DE
+ * map. Relations whose locale name is absent are omitted (not nulled). A
+ * `shared` relation (non-i18n target) links the EN id from both locales. The DE
  * payload is built only when the row supplied DE-side data.
  */
 export function resolveFactRow(row: ParsedFactRow, relations: RelationMap): BulkRow {
@@ -148,7 +149,11 @@ export function resolveFactRow(row: ParsedFactRow, relations: RelationMap): Bulk
 
   for (const ref of row.relations) {
     if (ref.en !== undefined) {
-      en[ref.attr] = lookup(relations, ref.collection, 'en', ref.en);
+      const id = lookup(relations, ref.collection, 'en', ref.en);
+      en[ref.attr] = id;
+      if (ref.shared) {
+        de[ref.attr] = id;
+      }
     }
     if (row.hasDe && ref.de !== undefined) {
       de[ref.attr] = lookup(relations, ref.collection, 'de', ref.de);

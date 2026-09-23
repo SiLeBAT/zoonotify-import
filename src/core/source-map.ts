@@ -45,12 +45,12 @@ export const MASTERDATA_REFERENCES: MasterdataPair[] = [
 /**
  * `matrix-detail` is the tenth reference collection and the one exception to
  * "masterdata is authoritative": it has no masterdata column, so its rows are the
- * distinct values harvested from the `Matrixdetail` column across both fact
+ * distinct values harvested from the `Matrixdetail` column across the fact
  * sheets. It is **not** i18n — a single `name` per row (§3 of the source format).
  */
 export const MATRIX_DETAIL_SOURCE = {
   collection: 'matrix-detail',
-  sheets: ['amr_resrate', 'prevalence'],
+  sheets: ['amr_resrate', 'prevalence', 'multires'],
   column: 'Matrixdetail',
 } as const;
 
@@ -61,7 +61,29 @@ export interface FactScalarSource {
   /** Source column. */
   column: string;
   type: ScalarType;
+  /** Source label → stored value, for a column that carries a label instead of the value. */
+  codes?: Readonly<Record<string, number>>;
 }
+
+/**
+ * The `multires` sheet names each Resistance group by label. The steward uses two
+ * schemes — most microorganisms stop at `> 4 x`, MRSA continues `5 x` … `> 8 x` —
+ * mapped onto one ordered code scale. Codes 0–5 are the 6-group scheme; no single
+ * Combination mixes the two, so within a bar the codes always ascend.
+ */
+export const RESISTANCE_GROUP_CODES: Readonly<Record<string, number>> = {
+  sensibel: 0,
+  '1 x resistant': 1,
+  '2 x resistant': 2,
+  '3 x resistant': 3,
+  '4 x resistant': 4,
+  '> 4 x resistant': 5,
+  '5 x resistant': 6,
+  '6 x resistant': 7,
+  '7 x resistant': 8,
+  '8 x resistant': 9,
+  '> 8 x resistant': 10,
+};
 
 /** One fact relation sourced from a DE/EN column pair; resolved to an id via the relation map. */
 export interface FactRelationSource {
@@ -73,6 +95,11 @@ export interface FactRelationSource {
   de: string;
   /** Source column holding the English reference name. */
   en: string;
+  /**
+   * The target collection is not i18n (`matrix-detail`): one name, read from `en`,
+   * and the same id is linked from both locale payloads.
+   */
+  shared?: true;
 }
 
 /** A fact collection and the source sheet + per-attribute columns that build it. */
@@ -85,7 +112,7 @@ export interface FactSourceMap {
   relations: FactRelationSource[];
 }
 
-/** The two fact collections and their column bindings (§4–§5 of the source format). */
+/** The three fact collections and their column bindings (§4–§5 of the source format, ADR 0008). */
 export const FACT_SOURCES: FactSourceMap[] = [
   {
     collection: 'resistance',
@@ -176,6 +203,59 @@ export const FACT_SOURCES: FactSourceMap[] = [
         collection: 'sampling-stage',
         de: 'Probenahmestelle',
         en: 'Sampling stage',
+      },
+    ],
+  },
+  {
+    collection: 'multi-resistance',
+    sheet: 'multires',
+    scalars: [
+      { attr: 'dbId', column: 'string_dbid', type: 'string' },
+      { attr: 'zomoProgram', column: 'ZoMo-Programm', type: 'string' },
+      { attr: 'samplingYear', column: 'Jahr', type: 'integer' },
+      {
+        attr: 'resistanceGroup',
+        column: 'multires_group_en',
+        type: 'integer',
+        codes: RESISTANCE_GROUP_CODES,
+      },
+      { attr: 'anzahlIsolate', column: 'no_res_isolates', type: 'integer' },
+      { attr: 'anzahlGetesteterIsolate', column: 'total_isol', type: 'integer' },
+    ],
+    relations: [
+      { attr: 'matrix', collection: 'matrix', de: 'Matrix_neu', en: 'Matrix_new' },
+      { attr: 'matrixGroup', collection: 'matrix-group', de: 'Matrixgruppe', en: 'Matrix group' },
+      {
+        attr: 'microorganism',
+        collection: 'microorganism',
+        de: 'Mikroorganismus',
+        en: 'Microorganism',
+      },
+      { attr: 'specie', collection: 'specie', de: 'Spezies', en: 'Species' },
+      {
+        attr: 'sampleOrigin',
+        collection: 'sample-origin',
+        de: 'Probenursprung (Tier/Lebensmittel/Futtermittel)',
+        en: 'Sample origin',
+      },
+      {
+        attr: 'superCategorySampleOrigin',
+        collection: 'super-category-sample-origin',
+        de: 'Oberkategorie Probenursprung (Tier/Lebensmittel/Futtermittel)',
+        en: 'Superordinate sample origin',
+      },
+      {
+        attr: 'samplingStage',
+        collection: 'sampling-stage',
+        de: 'Probenahmestelle',
+        en: 'Sampling stage',
+      },
+      {
+        attr: 'matrixDetail',
+        collection: 'matrix-detail',
+        de: 'Matrixdetail',
+        en: 'Matrixdetail',
+        shared: true,
       },
     ],
   },

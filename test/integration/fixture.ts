@@ -1,10 +1,10 @@
 import ExcelJS from 'exceljs';
-import { MASTERDATA, AMR, PREV, type Cells } from '../fixtures/valid-3sheet.js';
+import { MASTERDATA, AMR, PREV, MULTIRES, type Cells } from '../fixtures/valid-3sheet.js';
 
 /**
- * Integration fixture for the 3-sheet contract (ADR 0007). The source workbook
- * has exactly three sheets — `masterdata`, `amr_resrate`, `prevalence` — and the
- * importer's normalizer derives the 12 Strapi collections from them. The
+ * Integration fixture for the 4-sheet contract (ADR 0007, ADR 0008). The source
+ * workbook has exactly four sheets — `masterdata`, `amr_resrate`, `prevalence`,
+ * `multires` — and the importer's normalizer derives the 13 Strapi collections. The
  * EXPECTED/EXPECTED_FACTS tables below describe the post-import DB state the
  * integration test asserts through the content-manager API.
  *
@@ -114,6 +114,16 @@ const PREV_ROW: Cells = {
   Produktionsrichtung: 'pr',
 };
 
+/** One multires row; it reuses amr's `Matrixdetail`, so matrix-detail stays at two. */
+const MULTIRES_ROW: Cells = {
+  ...Object.fromEntries(MULTIRES.columns.filter((c) => c in AMR_ROW).map((c) => [c, AMR_ROW[c]!])),
+  string_dbid: 'multires_ZP_2024_Salmonella_4plus',
+  multires_group_de: '> 4 x resistent',
+  multires_group_en: '> 4 x resistant',
+  no_res_isolates: 7,
+  total_isol: 100,
+};
+
 /**
  * Expected reference state. masterdata supplies nine collections (distinct
  * column-pair values); `matrix-detail` is the union of `Matrixdetail` across the
@@ -135,6 +145,7 @@ export const EXPECTED: ExpectedCollection[] = [
 export const EXPECTED_FACTS: ExpectedFact[] = [
   { collection: 'resistance', enCount: 1, deCount: 1 },
   { collection: 'prevalence', enCount: 1, deCount: 1 },
+  { collection: 'multi-resistance', enCount: 1, deCount: 1 },
 ];
 
 /** Builds the masterdata sheet's data rows from the column-parallel value lists. */
@@ -152,7 +163,7 @@ function factRow(columns: string[], record: Cells): (string | number | null)[] {
   return columns.map((c) => record[c] ?? null);
 }
 
-/** Writes the 3-sheet fixture workbook (`masterdata` + `amr_resrate` + `prevalence`). */
+/** Writes the 4-sheet fixture workbook (`masterdata` + `amr_resrate` + `prevalence` + `multires`). */
 export async function writeFixtureWorkbook(filePath: string): Promise<void> {
   const workbook = new ExcelJS.Workbook();
 
@@ -169,6 +180,10 @@ export async function writeFixtureWorkbook(filePath: string): Promise<void> {
   const prev = workbook.addWorksheet('prevalence');
   prev.addRow(PREV.columns);
   prev.addRow(factRow(PREV.columns, PREV_ROW));
+
+  const multires = workbook.addWorksheet('multires');
+  multires.addRow(MULTIRES.columns);
+  multires.addRow(factRow(MULTIRES.columns, MULTIRES_ROW));
 
   await workbook.xlsx.writeFile(filePath);
 }

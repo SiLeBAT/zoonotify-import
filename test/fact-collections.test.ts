@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { FACT_COLLECTIONS, factSpec } from '../src/core/fact-collections.js';
 
 describe('FACT_COLLECTIONS registry', () => {
-  it('registers exactly the two fact collections', () => {
+  it('registers exactly the three fact collections', () => {
     const names = FACT_COLLECTIONS.map((s) => s.collection).sort();
-    expect(names).toEqual(['prevalence', 'resistance']);
+    expect(names).toEqual(['multi-resistance', 'prevalence', 'resistance']);
   });
 
   it('resistance declares its 9 relations against the right reference collections', () => {
@@ -24,9 +24,15 @@ describe('FACT_COLLECTIONS registry', () => {
     });
   });
 
-  it('resistance keeps dbId as a required single scalar and zomoProgram as a paired scalar', () => {
+  it('resistance keeps dbId as a required, unique single scalar and zomoProgram as a paired scalar', () => {
     const scalars = Object.fromEntries(factSpec('resistance').scalars.map((s) => [s.attr, s]));
-    expect(scalars.dbId).toEqual({ attr: 'dbId', paired: false, type: 'string', required: true });
+    expect(scalars.dbId).toEqual({
+      attr: 'dbId',
+      paired: false,
+      type: 'string',
+      required: true,
+      unique: true,
+    });
     expect(scalars.zomoProgram).toEqual({ attr: 'zomoProgram', paired: true, type: 'string' });
   });
 

@@ -28,6 +28,8 @@ export interface FactScalarField {
   type: ScalarType;
   /** Whether a value is required in the base (`en`) locale. */
   required?: boolean;
+  /** Whether the value must be unique within the collection (pre-flight check #6). */
+  unique?: boolean;
 }
 
 export interface FactRelationField {
@@ -44,15 +46,33 @@ export interface FactCollectionSpec {
   relations: FactRelationField[];
   /** Bare attribute stems silently dropped if present on the sheet. */
   ignoredColumns?: string[];
+  /**
+   * Attributes (scalars or relations, by EN value) that together identify at most
+   * one row — for a collection with no single unique field (pre-flight check #6).
+   */
+  uniqueKey?: string[];
+  /** Attributes that must hold one value across all rows sharing `across` (check #6). */
+  consistent?: { attr: string; across: string[] }[];
 }
 
 const ZOMO: FactScalarField = { attr: 'zomoProgram', paired: true, type: 'string' };
+
+/** A multi-resistance Combination in one sampling year: one bar of the graph (ADR 0008). */
+const COMBINATION_YEAR = [
+  'microorganism',
+  'specie',
+  'matrix',
+  'matrixDetail',
+  'sampleOrigin',
+  'samplingStage',
+  'samplingYear',
+];
 
 export const FACT_COLLECTIONS: FactCollectionSpec[] = [
   {
     collection: 'resistance',
     scalars: [
-      { attr: 'dbId', paired: false, type: 'string', required: true },
+      { attr: 'dbId', paired: false, type: 'string', required: true, unique: true },
       ZOMO,
       { attr: 'samplingYear', paired: false, type: 'integer', required: true },
       { attr: 'anzahlGetesteterIsolate', paired: false, type: 'integer', required: true },
@@ -94,6 +114,31 @@ export const FACT_COLLECTIONS: FactCollectionSpec[] = [
     ],
     // Dead columns: the prevalence schema never had these relations. Dropped if present.
     ignoredColumns: ['matrixDetail', 'sampleType'],
+  },
+  {
+    collection: 'multi-resistance',
+    scalars: [
+      { attr: 'dbId', paired: false, type: 'string', required: true },
+      ZOMO,
+      { attr: 'samplingYear', paired: false, type: 'integer', required: true },
+      { attr: 'resistanceGroup', paired: false, type: 'integer', required: true },
+      { attr: 'anzahlIsolate', paired: false, type: 'integer', required: true },
+      { attr: 'anzahlGetesteterIsolate', paired: false, type: 'integer', required: true },
+    ],
+    relations: [
+      { attr: 'matrix', collection: 'matrix' },
+      { attr: 'matrixGroup', collection: 'matrix-group' },
+      { attr: 'microorganism', collection: 'microorganism' },
+      { attr: 'specie', collection: 'specie' },
+      { attr: 'sampleOrigin', collection: 'sample-origin' },
+      { attr: 'superCategorySampleOrigin', collection: 'super-category-sample-origin' },
+      { attr: 'samplingStage', collection: 'sampling-stage' },
+      { attr: 'matrixDetail', collection: 'matrix-detail' },
+    ],
+    // One row per Combination × sampling year × Resistance group (ADR 0008).
+    uniqueKey: [...COMBINATION_YEAR, 'resistanceGroup'],
+    // A Combination has exactly one N; each group row counts out of it.
+    consistent: [{ attr: 'anzahlGetesteterIsolate', across: COMBINATION_YEAR }],
   },
 ];
 

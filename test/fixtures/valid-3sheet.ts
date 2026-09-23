@@ -187,6 +187,71 @@ export const PREV: SheetDef = {
   },
 };
 
+/**
+ * The 4th sheet (ADR 0008): one row per Combination × year × Resistance group.
+ * Headers mirror the steward's `multires` sheet; the group arrives as a label.
+ */
+export const MULTIRES: SheetDef = {
+  name: 'multires',
+  columns: [
+    'ZoMo-Programm',
+    'Jahr',
+    'Sampling year',
+    'Mikroorganismus',
+    'Microorganism',
+    'Spezies',
+    'Species',
+    'Probentyp',
+    'Sample type',
+    'Oberkategorie Probenursprung (Tier/Lebensmittel/Futtermittel)',
+    'Superordinate sample origin',
+    'Probenursprung (Tier/Lebensmittel/Futtermittel)',
+    'Sample origin',
+    'Probenahmestelle',
+    'Sampling stage',
+    'Matrixgruppe',
+    'Matrix group',
+    'Matrix_neu',
+    'Matrix_new',
+    'Matrixdetail',
+    'Matrix_detail_en',
+    'string_dbid',
+    'Weitere Details',
+    'multires_group_de',
+    'multires_group_en',
+    'no_res_isolates',
+    'total_isol',
+  ],
+  row: {
+    'ZoMo-Programm': 'EH2',
+    Jahr: 2024,
+    'Sampling year': 2024,
+    Mikroorganismus: 'Campylobacter spp.',
+    Microorganism: 'Campylobacter spp.',
+    Spezies: 'C. coli',
+    Species: 'C. coli',
+    Probentyp: 'Lebensmittel',
+    'Sample type': 'Food',
+    'Oberkategorie Probenursprung (Tier/Lebensmittel/Futtermittel)': 'Huhn',
+    'Superordinate sample origin': 'Chicken',
+    'Probenursprung (Tier/Lebensmittel/Futtermittel)': 'Masthähnchen',
+    'Sample origin': 'Broiler',
+    Probenahmestelle: 'Einzelhandel',
+    'Sampling stage': 'Retail',
+    Matrixgruppe: 'Fleisch',
+    'Matrix group': 'Meat',
+    Matrix_neu: '(Hals)haut',
+    Matrix_new: '(Neck) skin',
+    Matrixdetail: 'gekühlt',
+    Matrix_detail_en: 'gekühlt',
+    string_dbid: 'multires_EH2_2024_C_coli_sensibel',
+    multires_group_de: 'sensibel',
+    multires_group_en: 'sensibel',
+    no_res_isolates: 4,
+    total_isol: 10,
+  },
+};
+
 /** Turns a SheetDef + row records into a buildWorkbook sheet spec. */
 export function spec(def: SheetDef, rows: Cells[] = [def.row]): SheetSpec {
   return {
@@ -202,5 +267,5 @@ export function workbookWith(...sheets: SheetSpec[]): ExcelJS.Workbook {
 
 /** A workbook that passes every pre-flight check. */
 export function validWorkbook(): ExcelJS.Workbook {
-  return workbookWith(spec(MASTERDATA), spec(AMR), spec(PREV));
+  return workbookWith(spec(MASTERDATA), spec(AMR), spec(PREV), spec(MULTIRES));
 }
