@@ -59,7 +59,7 @@ describe.runIf(ENABLED)('full workbook import against a live CMS', () => {
         STRAPI_TOKEN: token,
       },
     });
-    expect(stdout).toMatch(/Done: 10 reference collections, 2 fact collections/);
+    expect(stdout).toMatch(/Done: 10 reference collections, 3 fact collections/);
   }, 240_000);
 
   it('imports every reference collection with the expected per-locale row counts', async () => {
@@ -84,7 +84,7 @@ describe.runIf(ENABLED)('full workbook import against a live CMS', () => {
     expect(names).toEqual(['Breast meat', 'Skin']);
   });
 
-  it('imports both fact collections with the expected per-locale row counts', async () => {
+  it('imports every fact collection with the expected per-locale row counts', async () => {
     for (const fact of EXPECTED_FACTS) {
       const en = await listCollection(ADMIN_BASE, jwt, fact.collection, 'en');
       const de = await listCollection(ADMIN_BASE, jwt, fact.collection, 'de');
@@ -96,6 +96,12 @@ describe.runIf(ENABLED)('full workbook import against a live CMS', () => {
   it('carries the resistance dbId through to the DB (required + unique in schema)', async () => {
     const en = await listCollection(ADMIN_BASE, jwt, 'resistance', 'en');
     expect(en.results[0]?.dbId).toBe('R-2024-001');
+  });
+
+  it('stores the multires group label as its resistanceGroup code (> 4 x → 5)', async () => {
+    const en = await listCollection(ADMIN_BASE, jwt, 'multi-resistance', 'en');
+    expect(en.results[0]?.resistanceGroup).toBe(5);
+    expect(en.results[0]?.anzahlIsolate).toBe(7);
   });
 
   it('persists prevalence scalars; the dropped matrixDetail/sampleType columns leave no trace', async () => {
@@ -132,7 +138,7 @@ describe.runIf(ENABLED)('full workbook import against a live CMS', () => {
         env: { ...process.env, STRAPI_URL: `${ADMIN_BASE}/api`, STRAPI_TOKEN: token },
       },
     );
-    expect(stdout).toMatch(/Done: 10 reference collections, 2 fact collections/);
+    expect(stdout).toMatch(/Done: 10 reference collections, 3 fact collections/);
 
     for (const spec of EXPECTED) {
       const en = await listCollection(ADMIN_BASE, jwt, spec.collection, 'en');

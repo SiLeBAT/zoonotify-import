@@ -87,7 +87,8 @@ function parseFactRows(workbook: ExcelJS.Workbook, src: FactSourceMap): ParsedFa
       if (col === undefined) {
         continue;
       }
-      const value = coerce(cellValue(row, col), scalar.type);
+      const raw = cellValue(row, col);
+      const value = scalar.codes ? decode(raw, scalar.codes) : coerce(raw, scalar.type);
       if (value !== undefined) {
         en[scalar.attr] = value;
         de[scalar.attr] = value;
@@ -99,6 +100,16 @@ function parseFactRows(workbook: ExcelJS.Workbook, src: FactSourceMap): ParsedFa
     let hasDe = false;
     for (const rel of src.relations) {
       const ref: FactRelationRef = { attr: rel.attr, collection: rel.collection };
+      if (rel.shared) {
+        const col = headers.get(rel.en);
+        const name = col === undefined ? undefined : cellValue(row, col);
+        if (name !== undefined) {
+          ref.en = name;
+        }
+        ref.shared = true;
+        relations.push(ref);
+        continue;
+      }
       const enCol = headers.get(rel.en);
       const deCol = headers.get(rel.de);
       const enName = enCol === undefined ? undefined : cellValue(row, enCol);
@@ -124,6 +135,14 @@ function coerce(value: string | undefined, type: ScalarType): AttrValue | undefi
     return undefined;
   }
   return type === 'string' ? value : parseNumeric(value, type);
+}
+
+/** Looks a source label up in its code table; an unknown label yields no value. */
+function decode(
+  value: string | undefined,
+  codes: Readonly<Record<string, number>>,
+): AttrValue | undefined {
+  return value === undefined ? undefined : codes[value];
 }
 
 /** Distinct, first-seen `Matrixdetail` values unioned across both fact sheets, en-only. */

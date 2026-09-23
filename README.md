@@ -3,15 +3,15 @@
 Command-line tool that bulk-loads the Zoonotify surveillance workbook into the
 [Zoonotify CMS](../zoonotify-cms) (Strapi v5) through its dedicated **Import admin API**.
 
-It reads the BfR data steward's **native 3-sheet workbook** (`masterdata` + `amr_resrate` +
-`prevalence`), normalizes it into the 12 CMS collections, validates everything in a ten-check
+It reads the BfR data steward's **native 4-sheet workbook** (`masterdata` + `amr_resrate` +
+`prevalence` + `multires`), normalizes it into the 13 CMS collections, validates everything in a ten-check
 pre-flight, then **deletes and recreates** those collections with batching, retry, and a circuit
 breaker — writing a machine-readable result file you can inspect or branch on.
 
 > **The import is destructive.** It is delete-then-recreate, not an upsert, and is **not**
 > transactional across collections. Always take a database snapshot before a production run.
 
-The input contract is the **3-sheet format** (ADR 0007). The full column-by-column spec lives in
+The input contract is the **4-sheet format** (ADR 0007, extended by ADR 0008). The full column-by-column spec lives in
 [`source-xlsx-format.md`](../docs/import-cli-spec/source-xlsx-format.md) — give that to whoever
 produces the workbook.
 
@@ -19,14 +19,15 @@ produces the workbook.
 
 ## What it imports
 
-From **3 source sheets**, the importer derives **12 collections**:
+From **4 source sheets**, the importer derives **13 collections**:
 
-| Source sheet     | Produces                                                                                                                                                                                   |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `masterdata`     | 9 reference collections (`matrix`, `matrix-group`, `microorganism`, `specie`, `antimicrobial-substance`, `sample-type`, `sample-origin`, `super-category-sample-origin`, `sampling-stage`) |
-| `amr_resrate`    | the `resistance` fact collection                                                                                                                                                           |
-| `prevalence`     | the `prevalence` fact collection                                                                                                                                                           |
-| both fact sheets | the `matrix-detail` reference collection (harvested from their inline `Matrixdetail` column)                                                                                               |
+| Source sheet    | Produces                                                                                                                                                                                   |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `masterdata`    | 9 reference collections (`matrix`, `matrix-group`, `microorganism`, `specie`, `antimicrobial-substance`, `sample-type`, `sample-origin`, `super-category-sample-origin`, `sampling-stage`) |
+| `amr_resrate`   | the `resistance` fact collection                                                                                                                                                           |
+| `prevalence`    | the `prevalence` fact collection                                                                                                                                                           |
+| `multires`      | the `multi-resistance` fact collection                                                                                                                                                     |
+| all fact sheets | the `matrix-detail` reference collection (harvested from their inline `Matrixdetail` column)                                                                                               |
 
 Out of scope (loaded by the legacy CMS bootstrap mechanism): `resistance-table` ("cut-off"),
 `controlled-vocabulary`, `salmonella`. See [ADR 0006].
@@ -44,8 +45,8 @@ You need all of these before the importer can do anything useful:
 3. **An Import-role API token** from that CMS. It must be tied to the dedicated **Import** Strapi
    role (API-token only, access limited to the two `/import-admin/*` endpoints). See the
    [CMS README](../zoonotify-cms). Treat the token as a secret — anyone holding it can wipe and
-   refill the 12 collections.
-4. **The source workbook** in the 3-sheet format (see
+   refill the 13 collections.
+4. **The source workbook** in the 4-sheet format (see
    [`source-xlsx-format.md`](../docs/import-cli-spec/source-xlsx-format.md)). Run `--dry-run` first
    to confirm it conforms.
 
@@ -222,9 +223,12 @@ a given run.
 
 - **Exit 1, "Missing STRAPI_URL or STRAPI_TOKEN"** — copy `.env.example` to `.env` and fill it in.
 - **Exit 1, "insecure http://"** — use an `https://` URL, or `--insecure` for local dev only.
-- **Exit 2, check #2/#3 (missing sheet/column)** — the workbook isn't in the 3-sheet format. It
-  must have exactly `masterdata`, `amr_resrate`, `prevalence` with the columns in
+- **Exit 2, check #2/#3 (missing sheet/column)** — the workbook isn't in the 4-sheet format. It
+  must have exactly `masterdata`, `amr_resrate`, `prevalence`, `multires` with the columns in
   [`source-xlsx-format.md`](../docs/import-cli-spec/source-xlsx-format.md).
+- **Exit 2, check #6 on `multires`** — two rows for the same Combination × year × Resistance
+  group (often two ZoMo programmes sampling the same Combination), or rows of one Combination × year
+  with different `total_isol`. The steward must merge or drop one.
 - **Exit 2, check #7 (relation)** — a fact row references a name that isn't in `masterdata` (same
   locale). Add the name to `masterdata` or fix the typo.
 - **Exit 2, check #8 (locale)** — a row is missing one of its `_en` / `_de` halves. Both locales

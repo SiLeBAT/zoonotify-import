@@ -46,6 +46,8 @@ export interface FactRelationRef {
   collection: string;
   en?: string;
   de?: string;
+  /** The target is not i18n: `en` names it, and its id is linked from both locales. */
+  shared?: true;
 }
 
 /**
