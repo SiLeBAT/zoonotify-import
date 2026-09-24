@@ -21,11 +21,15 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
-    # Needs the sibling zoonotify-cms checked out next to this repo to build its
-    # Docker image. In the monorepo both packages are already present; for a
-    # standalone checkout, fetch the CMS into ../zoonotify-cms first.
+    # The compose stack builds the CMS image from the sibling ../zoonotify-cms,
+    # which the monorepo layout provides locally but a CI checkout does not.
     steps:
       - uses: actions/checkout@v4
+      # actions/checkout refuses paths outside the workspace, so clone directly.
+      # `develop` because CMS fixes the importer depends on land there first
+      # (e.g. the is-import-token policy for Strapi 5's content-api-token).
+      - name: Fetch the sibling zoonotify-cms
+        run: git clone --depth 1 --branch develop https://github.com/SiLeBAT/zoonotify-cms.git ../zoonotify-cms
       - uses: actions/setup-node@v4
         with:
           node-version: 20
