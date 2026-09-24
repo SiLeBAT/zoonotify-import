@@ -1,0 +1,6 @@
+{
+  "batchSize": 50,
+  "concurrency": 2,
+  "requestTimeout": 180,
+  "verbose": true
+}

@@ -168,6 +168,36 @@ The `--config` file accepts the same knobs as JSON (camelCase, `requestTimeout` 
 { "batchSize": 100, "concurrency": 2, "requestTimeout": 60, "report": "./out.json" }
 ```
 
+Unknown keys are ignored without a warning, so a misspelled key silently falls back to its
+default.
+
+### Importing into the BfR QA and prod servers
+
+Use the checked-in [`config/qa-prod.json`](config/qa-prod.json) (50 rows per batch, 2 in
+flight, 180 s timeout, per-batch timing on) with the environment's `.env` file:
+
+```bash
+DOTENV_CONFIG_PATH=.env.qa npm start -- --config config/qa-prod.json -y <workbook.xlsx>
+```
+
+With the release artifact, pass the same file: `node zoonotify-import.mjs --config qa-prod.json …`
+(the bundle does not include it).
+
+- **Why not the defaults:** on QA a 200-row `resistance` batch takes longer than 30 s, so the
+  default settings time out and trip the circuit breaker mid-import, leaving the database
+  partial. The server still saves a batch the CLI gave up on. A retry of such a batch cannot
+  duplicate `resistance` rows (its `dbId` is unique), but it can duplicate `prevalence` and
+  `multi-resistance` rows. The long timeout exists to keep retries rare. Verified 2026-09-24:
+  13 139 rows, 270 batches, all on the first attempt, about 13 minutes. Prod is assumed to behave
+  like QA; if `--verbose` shows batches nearing 180 s, lower `batchSize` rather than raising the
+  timeout further.
+- **`STRAPI_URL`** is `https://<host>/cms/api`. Apache serves the CMS under `/cms`; without the
+  prefix the requests reach the website and the schema checks fail with
+  `Unexpected token '<'`.
+- **`STRAPI_TOKEN`** is the Custom Import token (see Prerequisites). With it, the 13
+  `schema drift not verified … 403 Forbidden` warnings are expected: that token may not read the
+  content-type-builder, and the check only warns.
+
 ---
 
 ## Exit codes → action
@@ -239,7 +269,9 @@ a given run.
   provide. An unreachable schema endpoint downgrades to a _warning_, not a block.
 - **Exit 4 / 5 (partial DB)** — restore the snapshot before re-running. Read `failures[]`; exit 5
   means the CMS kept failing batches (likely unhealthy).
-- **Slow / timing out** — lower `--batch-size`, raise `--request-timeout`, watch `--verbose`.
+- **Slow / timing out** — lower `--batch-size`, raise `--request-timeout`, watch `--verbose`. On the
+  BfR servers, start from `config/qa-prod.json` (see
+  [Importing into the BfR QA and prod servers](#importing-into-the-bfr-qa-and-prod-servers)).
 
 See the [ops runbook](./docs/runbook.md) for step-by-step incident handling.
 
