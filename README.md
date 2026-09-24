@@ -42,10 +42,12 @@ You need all of these before the importer can do anything useful:
    build from source rather than downloading the release artifact — see below.)
 2. **A reachable Zoonotify CMS** that exposes the **Import admin API** (`/import-admin/truncate`
    and `/import-admin/bulk-create`) — this ships in `zoonotify-cms`.
-3. **An Import-role API token** from that CMS. It must be tied to the dedicated **Import** Strapi
-   role (API-token only, access limited to the two `/import-admin/*` endpoints). See the
-   [CMS README](../zoonotify-cms). Treat the token as a secret — anyone holding it can wipe and
-   refill the 13 collections.
+3. **The Import API token** from that CMS: a Strapi API token of type **Custom**, granted only
+   `Import-admin → truncate` and `Import-admin → bulkCreate`. The import endpoints accept no other
+   kind — a **Full access** or **Read-only** token authenticates but is refused with
+   `403 Policy Failed`. How to create it:
+   [CMS README](../zoonotify-cms/README.md#post-deploy-operator-step--generate-the-import-api-token).
+   Treat the token as a secret — anyone holding it can wipe and refill the 13 collections.
 4. **The source workbook** in the 4-sheet format (see
    [`source-xlsx-format.md`](../docs/import-cli-spec/source-xlsx-format.md)). Run `--dry-run` first
    to confirm it conforms.
@@ -105,7 +107,7 @@ cp .env.example .env   # then edit .env with your values
 | Variable       | Meaning                                                                      |
 | -------------- | ---------------------------------------------------------------------------- |
 | `STRAPI_URL`   | Base URL of the CMS **including the `/api` REST prefix**, no trailing slash. |
-| `STRAPI_TOKEN` | API token tied to the dedicated **Import** Strapi role.                      |
+| `STRAPI_TOKEN` | The **Custom** Import API token (see Prerequisites).                         |
 
 `STRAPI_URL` **must be `https://`**. A plain `http://` URL is refused unless you pass `--insecure`
 (intended only for local development against `http://localhost:1337/api`). Any trailing slash is
