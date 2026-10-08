@@ -9,8 +9,8 @@ jobs:
   unit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
@@ -24,13 +24,13 @@ jobs:
     # The compose stack builds the CMS image from the sibling ../zoonotify-cms,
     # which the monorepo layout provides locally but a CI checkout does not.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # actions/checkout refuses paths outside the workspace, so clone directly.
       # `develop` because CMS fixes the importer depends on land there first
       # (e.g. the is-import-token policy for Strapi 5's content-api-token).
       - name: Fetch the sibling zoonotify-cms
         run: git clone --depth 1 --branch develop https://github.com/SiLeBAT/zoonotify-cms.git ../zoonotify-cms
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
