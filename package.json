@@ -22,7 +22,7 @@
     "prepare": "husky"
   },
   "dependencies": {
-    "commander": "^12.1.0",
+    "commander": "^15.0.0",
     "dotenv": "^16.4.5",
     "exceljs": "^4.4.0",
     "p-limit": "^6.2.0",
