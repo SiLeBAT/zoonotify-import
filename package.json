@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "commander": "^12.1.0",
-    "dotenv": "^16.4.5",
+    "dotenv": "^18.0.5",
     "exceljs": "^4.4.0",
     "p-limit": "^6.2.0",
     "pino": "^9.4.0",
