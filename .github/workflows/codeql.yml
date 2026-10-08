@@ -1,0 +1,43 @@
+name: CodeQL
+
+# Static security analysis (ADR 0009). Report-only for now: findings land in
+# the Security tab, but this is not a required check until the first run has
+# been triaged.
+on:
+  workflow_dispatch:
+  push:
+    branches: [develop, main]
+  pull_request:
+  schedule:
+    # Mondays 04:23 UTC -- this repo is often quiet, so new queries still run
+    # against unchanged code.
+    - cron: '23 4 * * 1'
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: 'Analyze (${{ matrix.language }})'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # `actions` scans the workflow files themselves (injection, token scope).
+        language: [javascript-typescript, actions]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          # Neither language needs a build; CodeQL extracts the source directly.
+          build-mode: none
+          queries: security-extended
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: '/language:${{ matrix.language }}'

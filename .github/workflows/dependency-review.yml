@@ -1,0 +1,22 @@
+name: Dependency Review
+
+# Blocks PRs that add a dependency with a known high/critical vulnerability
+# (ADR 0009). Dev-only dependencies are not bundled into the released
+# zoonotify-import.mjs, so they only raise Dependabot alerts and never block a
+# merge.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-review:
+    name: 'Review dependency changes'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/dependency-review-action@v5
+        with:
+          fail-on-severity: high
+          fail-on-scopes: runtime
