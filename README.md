@@ -145,21 +145,21 @@ Exit code `0` means success. Read the result JSON (below) to confirm what was re
 
 ### Flags
 
-| Flag                              | Default                      | Meaning                                                            |
-| --------------------------------- | ---------------------------- | ------------------------------------------------------------------ |
-| `--dry-run`                       | off                          | Run pre-flight + summary only; make no changes.                    |
-| `-y, --yes`                       | off                          | Skip the interactive confirmation prompt.                          |
-| `--batch-size <rows>`             | `200`                        | Rows per bulk-create request.                                      |
-| `--concurrency <n>`               | `3`                          | Max in-flight bulk-create requests.                                |
-| `--request-timeout <seconds>`     | `30`                         | Per-request timeout.                                               |
-| `--max-retries <n>`               | `4`                          | Retries per batch on `429/502/503/504`, `ECONNRESET`, `ETIMEDOUT`. |
-| `--circuit-breaker-threshold <n>` | `3`                          | Consecutive failed batches that abort the import (exit 5).         |
-| `--report <path>`                 | `./import-result-<ISO>.json` | Result JSON file path.                                             |
-| `--config <path>`                 | —                            | JSON config file of defaults (lower priority than flags).          |
-| `--verbose`                       | off                          | Log per-batch timing to stdout.                                    |
-| `--quiet`                         | off                          | Suppress stdout; only errors to stderr.                            |
-| `--no-color`                      | off                          | Disable ANSI color.                                                |
-| `--insecure`                      | off                          | Allow a plain `http://` `STRAPI_URL` (prints a loud warning).      |
+| Flag                              | Default                      | Meaning                                                                                                                                                                          |
+| --------------------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--dry-run`                       | off                          | Run pre-flight + summary only; make no changes.                                                                                                                                  |
+| `-y, --yes`                       | off                          | Skip the interactive confirmation prompt.                                                                                                                                        |
+| `--batch-size <rows>`             | `200`                        | Rows per bulk-create request.                                                                                                                                                    |
+| `--concurrency <n>`               | `3`                          | Max in-flight bulk-create requests.                                                                                                                                              |
+| `--request-timeout <seconds>`     | `30`                         | Per-request timeout.                                                                                                                                                             |
+| `--max-retries <n>`               | `4`                          | Retries per batch on `429/502/503/504`, `ECONNRESET`, `ETIMEDOUT`, and network outages (`ENOTFOUND`, `EAI_AGAIN`, `ENETUNREACH`, `EHOSTUNREACH`; these back off 15/30/60/120 s). |
+| `--circuit-breaker-threshold <n>` | `3`                          | Consecutive failed batches that abort the import (exit 5).                                                                                                                       |
+| `--report <path>`                 | `./import-result-<ISO>.json` | Result JSON file path.                                                                                                                                                           |
+| `--config <path>`                 | —                            | JSON config file of defaults (lower priority than flags).                                                                                                                        |
+| `--verbose`                       | off                          | Log per-batch timing to stdout.                                                                                                                                                  |
+| `--quiet`                         | off                          | Suppress stdout; only errors to stderr.                                                                                                                                          |
+| `--no-color`                      | off                          | Disable ANSI color.                                                                                                                                                              |
+| `--insecure`                      | off                          | Allow a plain `http://` `STRAPI_URL` (prints a loud warning).                                                                                                                    |
 
 The `--config` file accepts the same knobs as JSON (camelCase, `requestTimeout` in seconds,
 `noColor` for color-off), e.g.:
