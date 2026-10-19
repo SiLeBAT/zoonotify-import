@@ -4,7 +4,7 @@
  * live here in the UI-agnostic core; the per-request timeout is the adapter's job.
  */
 import pLimit from 'p-limit';
-import { CircuitBreakerError, RequestError, isRetryable } from './errors.js';
+import { CircuitBreakerError, RequestError, isNetworkOutage, isRetryable } from './errors.js';
 import type { StrapiClient, BulkCreateResult } from './strapi-client.js';
 import type { BulkRow } from './domain.js';
 
@@ -75,11 +75,17 @@ function backoffMs(retry: number): number {
   return 1000 * 2 ** retry;
 }
 
+/** Backoff for the nth retry after a network outage: 15s, 30s, 60s, then 120s capped. */
+function outageBackoffMs(retry: number): number {
+  return Math.min(15_000 * 2 ** retry, 120_000);
+}
+
 /**
  * Run `fn`, retrying on retryable `RequestError`s up to `maxRetries` times with
- * exponential backoff (1s/2s/4s/8s). A `Retry-After` on the error overrides the
- * backoff for that one wait. Non-retryable errors, and the final failure after
- * the retry budget is spent, propagate to the caller.
+ * exponential backoff (1s/2s/4s/8s; 15s/30s/60s/120s for a network outage). A
+ * `Retry-After` on the error overrides the backoff for that one wait.
+ * Non-retryable errors, and the final failure after the retry budget is spent,
+ * propagate to the caller.
  */
 export async function withRetry<T>(
   fn: () => Promise<T>,
@@ -93,7 +99,9 @@ export async function withRetry<T>(
     } catch (err) {
       if (!isRetryable(err) || retry >= config.maxRetries) throw err;
       const override = err instanceof RequestError ? err.retryAfterMs : undefined;
-      await deps.sleep(override ?? backoffMs(retry));
+      await deps.sleep(
+        override ?? (isNetworkOutage(err) ? outageBackoffMs(retry) : backoffMs(retry)),
+      );
       retry += 1;
     }
   }

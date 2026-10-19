@@ -30,8 +30,19 @@ export class NotImplementedError extends ImportError {
 
 /** HTTP statuses worth a retry: rate-limit + transient gateway/server errors. */
 export const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
+/**
+ * Network-outage codes (DNS failure, network/host unreachable). Each fails before the
+ * request is sent, so a retry cannot duplicate rows; they back off on the longer
+ * outage schedule because a VPN drop lasts tens of seconds, not milliseconds.
+ */
+export const NETWORK_OUTAGE_CODES = new Set([
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+]);
 /** Transient network errors worth a retry. */
-export const RETRYABLE_CODES = new Set(['ECONNRESET', 'ETIMEDOUT']);
+export const RETRYABLE_CODES = new Set(['ECONNRESET', 'ETIMEDOUT', ...NETWORK_OUTAGE_CODES]);
 
 /**
  * A failed request against the Import admin API, carrying just enough for the
@@ -62,6 +73,13 @@ export function isRetryable(err: unknown): boolean {
   if (err.status !== undefined && RETRYABLE_STATUSES.has(err.status)) return true;
   if (err.code !== undefined && RETRYABLE_CODES.has(err.code)) return true;
   return false;
+}
+
+/** True when `err` is a `RequestError` caused by a network outage (see `NETWORK_OUTAGE_CODES`). */
+export function isNetworkOutage(err: unknown): boolean {
+  return (
+    err instanceof RequestError && err.code !== undefined && NETWORK_OUTAGE_CODES.has(err.code)
+  );
 }
 
 /** Thrown when too many consecutive batches exhaust their full retry cycle. */

@@ -19,7 +19,14 @@ describe('isRetryable', () => {
     for (const status of [429, 502, 503, 504]) {
       expect(isRetryable(new RequestError('x', { status })), `status ${status}`).toBe(true);
     }
-    for (const code of ['ECONNRESET', 'ETIMEDOUT']) {
+    for (const code of [
+      'ECONNRESET',
+      'ETIMEDOUT',
+      'ENOTFOUND',
+      'EAI_AGAIN',
+      'ENETUNREACH',
+      'EHOSTUNREACH',
+    ]) {
       expect(isRetryable(new RequestError('x', { code })), code).toBe(true);
     }
     // Other 4xx are programming errors — never retried.
@@ -89,6 +96,43 @@ describe('withRetry', () => {
 
     expect(attempts).toBe(1);
     expect(delays).toEqual([]);
+  });
+
+  it('backs off 15s/30s/60s/120s on a network outage (DNS failure, network unreachable)', async () => {
+    const { delays, sleep } = recordingSleep();
+    let attempts = 0;
+    const outage = new RequestError('vpn dropped', { code: 'ENETUNREACH' });
+
+    await expect(
+      withRetry(
+        async () => {
+          attempts += 1;
+          throw outage;
+        },
+        cfg,
+        { sleep },
+      ),
+    ).rejects.toBe(outage);
+
+    expect(attempts).toBe(5);
+    expect(delays).toEqual([15_000, 30_000, 60_000, 120_000]);
+  });
+
+  it('caps the outage backoff at 120s when maxRetries exceeds the schedule', async () => {
+    const { delays, sleep } = recordingSleep();
+    let attempts = 0;
+    const result = await withRetry(
+      async () => {
+        attempts += 1;
+        if (attempts <= 6) throw new RequestError('dns down', { code: 'ENOTFOUND' });
+        return 'ok';
+      },
+      { maxRetries: 6 },
+      { sleep },
+    );
+
+    expect(result).toBe('ok');
+    expect(delays).toEqual([15_000, 30_000, 60_000, 120_000, 120_000, 120_000]);
   });
 
   it('honors Retry-After, overriding the backoff schedule for that retry', async () => {
