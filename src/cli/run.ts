@@ -379,6 +379,17 @@ export async function runImport(
   deps.log(
     `Done: ${importReport.references.length} reference collections, ${importReport.facts.length} fact collections, ${importReport.relations.size} relation keys.`,
   );
+  // The site's "Data status" date. Only reached once every collection was
+  // written, so a partial import never moves it. The data itself is in, so a
+  // failure here warns rather than failing the run.
+  try {
+    const recordedAt = await client.recordImport();
+    deps.log(`Recorded data status: ${recordedAt}.`);
+  } catch (err) {
+    deps.error(
+      `Warning: the import succeeded, but recording its date for the site's data status failed: ${(err as Error).message}. Check that the Import token is granted Import-admin → recordImport.`,
+    );
+  }
   await persist('success', 0, report, { collections: toCollectionResults(syncs, batchEvents) });
   return 0;
 }

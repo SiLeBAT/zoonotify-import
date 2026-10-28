@@ -19,6 +19,9 @@ class IdByNameClient implements StrapiClient {
       return { rowIndex: i, documentId: `d-${n}`, id_en: 100 + n, id_de: 200 + n };
     });
   }
+  async recordImport(): Promise<string> {
+    return '2026-06-01T00:00:00.000Z';
+  }
   async fetchSchema(): Promise<never> {
     throw new Error('not used');
   }

@@ -21,6 +21,9 @@ class FakeStrapiClient implements StrapiClient {
     }));
   }
 
+  async recordImport(): Promise<string> {
+    return '2026-06-01T00:00:00.000Z';
+  }
   fetchSchema(): Promise<never> {
     throw new Error('not used in this test');
   }

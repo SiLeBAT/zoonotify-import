@@ -25,6 +25,10 @@ class RecordingClient implements StrapiClient {
   async fetchSchema(): Promise<LiveSchema> {
     return { attributes: {} }; // no required attrs → no schema drift
   }
+  async recordImport(): Promise<string> {
+    this.calls.push('recordImport');
+    return '2026-06-01T00:00:00.000Z';
+  }
 }
 
 const goodEnv = { STRAPI_URL: 'https://cms.example/api', STRAPI_TOKEN: 'tok' };
@@ -475,7 +479,35 @@ describe('runImport — success', () => {
       'bulkCreate:specie',
       'bulkCreate:matrix',
       'bulkCreate:resistance',
+      'recordImport',
     ]);
     expect(results.at(-1)?.outcome).toBe('success');
+  });
+
+  it('still succeeds, with a warning, when recording the import date fails', async () => {
+    class NoRecordGrantClient extends RecordingClient {
+      override async recordImport(): Promise<string> {
+        throw new RequestError('POST /import-admin/record-import failed: 403 Forbidden', {
+          status: 403,
+        });
+      }
+    }
+    const errors: string[] = [];
+    const results: ImportResult[] = [];
+    const code = await runImport(
+      'wb.xlsx',
+      goodEnv,
+      deps({
+        makeClient: () => new NoRecordGrantClient(),
+        error: (m) => errors.push(m),
+        writeResult: async (r) => {
+          results.push(r);
+        },
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(results.at(-1)?.outcome).toBe('success');
+    expect(errors.join('\n')).toMatch(/recordImport/);
   });
 });

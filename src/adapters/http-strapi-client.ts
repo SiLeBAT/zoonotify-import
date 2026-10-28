@@ -76,6 +76,12 @@ export class HttpStrapiClient implements StrapiClient {
     return body.created;
   }
 
+  async recordImport(): Promise<string> {
+    // The CMS stamps the time itself and echoes it as `{ completedAt }`.
+    const body = await this.post<{ completedAt: string }>('/import-admin/record-import', {});
+    return body.completedAt;
+  }
+
   /**
    * Fetches a collection's live schema from the content-type-builder and
    * normalizes it for check #10. Best-effort: if the endpoint is unreachable or

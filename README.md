@@ -40,10 +40,13 @@ You need all of these before the importer can do anything useful:
 
 1. **Node 20 LTS** (or newer). Check with `node -v`. (`npm` is only needed if you
    build from source rather than downloading the release artifact — see below.)
-2. **A reachable Zoonotify CMS** that exposes the **Import admin API** (`/import-admin/truncate`
-   and `/import-admin/bulk-create`) — this ships in `zoonotify-cms`.
+2. **A reachable Zoonotify CMS** that exposes the **Import admin API** (`/import-admin/truncate`,
+   `/import-admin/bulk-create` and `/import-admin/record-import`) — this ships in `zoonotify-cms`.
+   After a successful import the CLI calls `record-import`, which sets the date the site shows
+   as its *Data status*; if that call fails the run still succeeds, with a warning.
 3. **The Import API token** from that CMS: a Strapi API token of type **Custom**, granted only
-   `Import-admin → truncate` and `Import-admin → bulkCreate`. The import endpoints accept no other
+   `Import-admin → truncate`, `Import-admin → bulkCreate` and `Import-admin → recordImport`.
+   The import endpoints accept no other
    kind — a **Full access** or **Read-only** token authenticates but is refused with
    `403 Policy Failed`. How to create it:
    [CMS README](../zoonotify-cms/README.md#post-deploy-operator-step--generate-the-import-api-token).
@@ -295,7 +298,7 @@ src/
     throughput.ts           batching, concurrency, retry, circuit breaker
     orchestrator.ts         truncate-all → create-all phase ordering + relation stamping
     result.ts               the result-file schema
-    strapi-client.ts        StrapiClient port (truncate / bulkCreate / fetchSchema)
+    strapi-client.ts        StrapiClient port (truncate / bulkCreate / fetchSchema / recordImport)
   adapters/
     http-strapi-client.ts   native-fetch implementation of the port
   cli/                      commander entry point, wiring, pino logger

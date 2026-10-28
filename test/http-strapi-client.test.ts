@@ -52,6 +52,22 @@ describe('HttpStrapiClient', () => {
     expect(JSON.parse(init.body)).toEqual({ collection: 'microorganism', rows });
   });
 
+  it('recordImport POSTs to /import-admin/record-import and returns the stamped date', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ completedAt: '2026-10-19T13:04:36.464Z' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new HttpStrapiClient('http://localhost:3000', 'tok');
+
+    const result = await client.recordImport();
+
+    expect(result).toBe('2026-10-19T13:04:36.464Z');
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('http://localhost:3000/import-admin/record-import');
+    expect(init.method).toBe('POST');
+    expect(init.headers.authorization).toBe('Bearer tok');
+  });
+
   it('rejects on a non-2xx response (fail-fast on the first HTTP error)', async () => {
     const fetchMock = vi
       .fn()
