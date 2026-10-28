@@ -35,6 +35,9 @@ class OkClient implements StrapiClient {
   async bulkCreate(_c: string, rows: BulkRow[]): Promise<BulkCreateResult[]> {
     return rows.map((_, i) => ({ rowIndex: i, documentId: `d${i}`, id_en: i + 1 }));
   }
+  async recordImport(): Promise<string> {
+    return '2026-06-01T00:00:00.000Z';
+  }
   async fetchSchema(): Promise<LiveSchema> {
     return { attributes: {} };
   }

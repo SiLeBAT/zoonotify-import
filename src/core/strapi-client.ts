@@ -36,4 +36,6 @@ export interface StrapiClient {
   truncate(collection: string): Promise<TruncateResult>;
   bulkCreate(collection: string, rows: BulkRow[]): Promise<BulkCreateResult[]>;
   fetchSchema(collection: string): Promise<LiveSchema>;
+  /** Stamps the CMS's last-successful-import date; resolves to the stored ISO timestamp. */
+  recordImport(): Promise<string>;
 }

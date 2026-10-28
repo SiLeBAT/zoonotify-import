@@ -49,6 +49,9 @@ export class FlakyStrapiClient implements StrapiClient {
     return { en: 0, de: 0 };
   }
 
+  async recordImport(): Promise<string> {
+    return '2026-06-01T00:00:00.000Z';
+  }
   async fetchSchema(): Promise<LiveSchema> {
     return { attributes: {} };
   }
