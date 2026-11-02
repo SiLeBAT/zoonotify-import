@@ -51,15 +51,23 @@ describe.runIf(ENABLED)('full workbook import against a live CMS', () => {
     await writeFixtureWorkbook(workbookPath);
 
     // Run the real CLI end-to-end against the live CMS.
-    const { stdout } = await run('npx', ['tsx', 'src/cli/index.ts', '--insecure', workbookPath], {
-      cwd: repoRoot,
-      env: {
-        ...process.env,
-        STRAPI_URL: `${ADMIN_BASE}/api`,
-        STRAPI_TOKEN: token,
+    const { stdout, stderr } = await run(
+      'npx',
+      ['tsx', 'src/cli/index.ts', '--insecure', workbookPath],
+      {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          STRAPI_URL: `${ADMIN_BASE}/api`,
+          STRAPI_TOKEN: token,
+        },
       },
-    });
+    );
     expect(stdout).toMatch(/Done: 10 reference collections, 3 fact collections/);
+    // A failed record-import only warns (exit 0), so assert it went through:
+    // the strict policy must accept the token for all three import-admin calls.
+    expect(String(stderr)).not.toMatch(/recording its date .* failed/);
+    expect(stdout).toMatch(/Recorded data status: /);
   }, 240_000);
 
   it('imports every reference collection with the expected per-locale row counts', async () => {
