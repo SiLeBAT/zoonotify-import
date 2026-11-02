@@ -52,23 +52,53 @@ export async function adminJwt(baseUrl: string): Promise<string> {
 }
 
 /**
- * Creates a custom API token granted the two import-admin route actions. The
- * `is-import-token` policy accepts any custom-type token; Strapi's api-token
- * strategy additionally requires the token to carry the route permissions.
+ * The token the CMS `is-import-token` policy accepts — it mirrors `importToken`
+ * in zoonotify-cms `config/permissions.mjs`. The policy refuses, with a 403
+ * `PolicyError` naming the mismatch, any token that is not of type `custom`,
+ * not named exactly `Import`, or whose grants are not exactly these actions.
+ */
+const IMPORT_TOKEN = {
+  name: 'Import',
+  type: 'custom',
+  actions: [
+    'api::import-admin.import-admin.truncate',
+    'api::import-admin.import-admin.bulkCreate',
+    'api::import-admin.import-admin.recordImport',
+  ],
+} as const;
+
+/**
+ * Creates the Import token exactly as the strict `is-import-token` policy
+ * expects (see IMPORT_TOKEN). Token names are unique in Strapi, so an `Import`
+ * token left over from an earlier run against the same database is deleted
+ * first; the docker-compose stack normally starts from a fresh database.
  */
 export async function createImportToken(baseUrl: string, jwt: string): Promise<string> {
+  const auth = { authorization: `Bearer ${jwt}` };
+  const list = await fetch(`${baseUrl}/admin/api-tokens`, { headers: auth });
+  if (!list.ok) {
+    throw new Error(`api-token list failed: ${list.status} ${await list.text()}`);
+  }
+  const existing = ((await list.json()) as { data: Array<{ id: number; name: string }> }).data;
+  for (const token of existing.filter((t) => t.name === IMPORT_TOKEN.name)) {
+    const del = await fetch(`${baseUrl}/admin/api-tokens/${token.id}`, {
+      method: 'DELETE',
+      headers: auth,
+    });
+    if (!del.ok) {
+      throw new Error(`api-token delete failed: ${del.status} ${await del.text()}`);
+    }
+  }
+
   const res = await fetch(`${baseUrl}/admin/api-tokens`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${jwt}` },
+    headers: { 'content-type': 'application/json', ...auth },
     body: JSON.stringify({
-      name: `import-integration-${Date.now()}`,
+      name: IMPORT_TOKEN.name,
       description: 'Integration-test Import token',
-      type: 'custom',
+      type: IMPORT_TOKEN.type,
       lifespan: null,
-      permissions: [
-        'api::import-admin.import-admin.truncate',
-        'api::import-admin.import-admin.bulkCreate',
-      ],
+      permissions: IMPORT_TOKEN.actions,
     }),
   });
   if (!res.ok) {

@@ -43,12 +43,14 @@ You need all of these before the importer can do anything useful:
 2. **A reachable Zoonotify CMS** that exposes the **Import admin API** (`/import-admin/truncate`,
    `/import-admin/bulk-create` and `/import-admin/record-import`) — this ships in `zoonotify-cms`.
    After a successful import the CLI calls `record-import`, which sets the date the site shows
-   as its *Data status*; if that call fails the run still succeeds, with a warning.
-3. **The Import API token** from that CMS: a Strapi API token of type **Custom**, granted only
-   `Import-admin → truncate`, `Import-admin → bulkCreate` and `Import-admin → recordImport`.
-   The import endpoints accept no other
-   kind — a **Full access** or **Read-only** token authenticates but is refused with
-   `403 Policy Failed`. How to create it:
+   as its _Data status_; if that call fails the run still succeeds, with a warning.
+3. **The Import API token** from that CMS: a Strapi API token of type **Custom**, **named exactly
+   `Import`**, granted exactly `Import-admin → truncate`, `Import-admin → bulkCreate` and
+   `Import-admin → recordImport` — no more, no fewer. The import endpoints accept no other token:
+   a **Full access** or **Read-only** token, a Custom token with any other name, or one with a
+   missing or extra grant authenticates but is refused with **403 `PolicyError`**. The error
+   message starts `Not the Import token:` and names the mismatch (type, name, or the missing and
+   extra grants), so fix the token in the admin panel and re-run. How to create it:
    [CMS README](../zoonotify-cms/README.md#post-deploy-operator-step--generate-the-import-api-token).
    Treat the token as a secret — anyone holding it can wipe and refill the 13 collections.
 4. **The source workbook** in the 4-sheet format (see
@@ -326,8 +328,8 @@ suite before a commit is allowed.
 ### Integration test
 
 `test/integration/` brings up real Postgres + the real Strapi CMS via docker-compose, provisions a
-custom Import token, runs the CLI against a generated 3-sheet fixture, and asserts the resulting DB
-state through the content-manager API.
+custom `Import` token (name and grants as the CMS policy requires), runs the CLI against a
+generated 3-sheet fixture, and asserts the resulting DB state through the content-manager API.
 
 ```bash
 npm run test:integration   # requires Docker; builds the CMS image, slow on first run
