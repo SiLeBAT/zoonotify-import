@@ -4,7 +4,15 @@ import { normalizeFacts, normalizeReferences } from '../src/core/normalizer.js';
 import { syncImport } from '../src/core/orchestrator.js';
 import type { BulkRow } from '../src/core/domain.js';
 import type { BulkCreateResult, StrapiClient, TruncateResult } from '../src/core/strapi-client.js';
-import { MASTERDATA, AMR, PREV, MULTIRES, spec, workbookWith } from './fixtures/valid-3sheet.js';
+import {
+  MASTERDATA,
+  AMR,
+  PREV,
+  MULTIRES,
+  SHEETS_ZN1934,
+  spec,
+  workbookWith,
+} from './fixtures/valid-3sheet.js';
 
 /** Records what each bulk-create was sent; like the server, returns no `id_de` for an EN-only row. */
 class RecordingStrapi implements StrapiClient {
@@ -36,7 +44,7 @@ class RecordingStrapi implements StrapiClient {
 describe('multires sheet → multi-resistance (ADR 0008)', () => {
   it('passes a valid 4-sheet workbook and counts its multi-resistance rows', async () => {
     const report = await runPreflight(
-      workbookWith(spec(MASTERDATA), spec(AMR), spec(PREV), spec(MULTIRES)),
+      workbookWith(spec(MASTERDATA), spec(AMR), spec(PREV), spec(MULTIRES), ...SHEETS_ZN1934),
     );
 
     expect(report.errors).toEqual([]);
@@ -75,6 +83,7 @@ describe('multires sheet → multi-resistance (ADR 0008)', () => {
       workbookWith(
         spec(MASTERDATA),
         spec(AMR),
+        ...SHEETS_ZN1934,
         spec(PREV),
         spec(MULTIRES, [{ ...MULTIRES.row, multires_group_en: '9 x resistant' }]),
       ),
@@ -98,6 +107,7 @@ describe('multires sheet → multi-resistance (ADR 0008)', () => {
         workbookWith(
           spec(MASTERDATA),
           spec(AMR),
+          ...SHEETS_ZN1934,
           spec(PREV),
           spec(MULTIRES, [{ ...MULTIRES.row, [column]: '-' }]),
         ),
@@ -122,6 +132,7 @@ describe('multires sheet → multi-resistance (ADR 0008)', () => {
           { Probenahmestelle: 'Schlachthof', Sampling_stage: 'Slaughterhouse' },
         ]),
         spec(AMR),
+        ...SHEETS_ZN1934,
         spec(PREV),
         spec(MULTIRES, [MULTIRES.row, otherStage]),
       ),
@@ -153,6 +164,7 @@ describe('multires sheet → multi-resistance (ADR 0008)', () => {
       workbookWith(
         spec(MASTERDATA),
         spec(AMR),
+        ...SHEETS_ZN1934,
         spec(PREV),
         spec(MULTIRES, [
           MULTIRES.row,
@@ -174,6 +186,7 @@ describe('multires sheet → multi-resistance (ADR 0008)', () => {
           { Mikroorganismus: 'Salmonella spp.', Microorganism: 'Salmonella spp.' },
         ]),
         spec(AMR),
+        ...SHEETS_ZN1934,
         spec(PREV),
         spec(MULTIRES, [
           MULTIRES.row,
@@ -197,6 +210,7 @@ describe('multires sheet → multi-resistance (ADR 0008)', () => {
       workbookWith(
         spec(MASTERDATA),
         spec(AMR),
+        ...SHEETS_ZN1934,
         spec(PREV),
         spec(MULTIRES, [MULTIRES.row, oneResistant]),
       ),

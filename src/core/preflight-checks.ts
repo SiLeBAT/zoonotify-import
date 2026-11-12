@@ -2,9 +2,10 @@ import type ExcelJS from 'exceljs';
 import type { CollectionImport } from './orchestrator.js';
 import type { FactImport, ParsedFactRow } from './domain.js';
 import type { LiveSchema } from './strapi-client.js';
-import { cellValue, parseNumeric, readHeader } from './cells.js';
+import { cellValue, parseTyped, readHeader } from './cells.js';
 import {
   FACT_SOURCES,
+  MASTERDATA_FLAT_REFERENCES,
   MASTERDATA_REFERENCES,
   MATRIX_DETAIL_SOURCE,
   type FactSourceMap,
@@ -42,8 +43,15 @@ export interface PreflightFinding {
   message: string;
 }
 
-/** The four sheets the source workbook contract requires (ADR 0007, ADR 0008). */
-export const REQUIRED_SHEETS = ['masterdata', 'amr_resrate', 'prevalence', 'multires'] as const;
+/**
+ * The sheets the source workbook contract requires: `masterdata` plus every fact
+ * sheet of the source map (ADR 0007, ADR 0008, zn1934). A missing fact sheet would
+ * otherwise wipe its collection to empty, since the import is delete-then-recreate.
+ */
+export const REQUIRED_SHEETS: readonly string[] = [
+  'masterdata',
+  ...FACT_SOURCES.map((src) => src.sheet),
+];
 
 // ---------------------------------------------------------------------------
 // Raw structural expectations, derived from the source map.
@@ -52,7 +60,8 @@ export const REQUIRED_SHEETS = ['masterdata', 'amr_resrate', 'prevalence', 'mult
 interface RawSheetSpec {
   sheet: string;
   requiredColumns: string[];
-  numericColumns: { column: string; type: 'integer' | 'float' }[];
+  /** Numeric and date columns, each checked against its declared type. */
+  typedColumns: { column: string; type: 'integer' | 'float' | 'date' }[];
   /** Label columns whose values must appear in their code table. */
   codedColumns: { column: string; codes: Readonly<Record<string, number>> }[];
 }
@@ -61,8 +70,11 @@ interface RawSheetSpec {
 function rawSheetSpecs(): RawSheetSpec[] {
   const masterdata: RawSheetSpec = {
     sheet: 'masterdata',
-    requiredColumns: MASTERDATA_REFERENCES.flatMap((p) => [p.de, p.en]),
-    numericColumns: [],
+    requiredColumns: [
+      ...MASTERDATA_REFERENCES.flatMap((p) => [p.de, p.en]),
+      ...MASTERDATA_FLAT_REFERENCES.map((r) => r.column),
+    ],
+    typedColumns: [],
     codedColumns: [],
   };
   const facts = FACT_SOURCES.map((src) => ({
@@ -74,9 +86,9 @@ function rawSheetSpecs(): RawSheetSpec[] {
         MATRIX_DETAIL_SOURCE.column,
       ]),
     ],
-    numericColumns: src.scalars
+    typedColumns: src.scalars
       .filter((s) => s.type !== 'string' && !s.codes)
-      .map((s) => ({ column: s.column, type: s.type as 'integer' | 'float' })),
+      .map((s) => ({ column: s.column, type: s.type as 'integer' | 'float' | 'date' })),
     codedColumns: src.scalars.flatMap((s) =>
       s.codes ? [{ column: s.column, codes: s.codes }] : [],
     ),
@@ -151,18 +163,18 @@ export function checkRequiredColumns(workbook: ExcelJS.Workbook): PreflightFindi
   return findings;
 }
 
-/** Check #4 — every numeric source cell parses to its declared type; every label is known. */
+/** Check #4 — every numeric/date source cell parses to its declared type; every label is known. */
 export function checkCellTypes(workbook: ExcelJS.Workbook): PreflightFinding[] {
   const findings: PreflightFinding[] = [];
   for (const spec of rawSheetSpecs()) {
     const sheet = workbook.getWorksheet(spec.sheet);
-    if (!sheet || spec.numericColumns.length + spec.codedColumns.length === 0) {
+    if (!sheet || spec.typedColumns.length + spec.codedColumns.length === 0) {
       continue;
     }
     for (const row of dataRows(sheet)) {
-      for (const { column, type } of spec.numericColumns) {
+      for (const { column, type } of spec.typedColumns) {
         const raw = row.value(column);
-        if (raw !== undefined && parseNumeric(raw, type) === undefined) {
+        if (raw !== undefined && parseTyped(raw, type) === undefined) {
           findings.push({
             check: 4,
             level: 'error',
@@ -170,7 +182,7 @@ export function checkCellTypes(workbook: ExcelJS.Workbook): PreflightFinding[] {
             row: row.rowNumber,
             field: column,
             value: raw,
-            message: `Sheet \`${spec.sheet}\` row ${row.rowNumber}: \`${column} = '${raw}'\` is not a valid ${type}`,
+            message: `Sheet \`${spec.sheet}\` row ${row.rowNumber}: \`${column} = '${raw}'\` is not a valid ${type === 'date' ? 'date (YYYY-MM-DD)' : type}`,
           });
         }
       }
@@ -219,13 +231,28 @@ function relationColumn(src: FactSourceMap, attr: string, locale: 'en' | 'de'): 
   return (rel ? rel[locale] : undefined) ?? attr;
 }
 
-/** Check #5 — every required fact scalar has a value in the normalized row. */
+/** Check #5 — every required fact scalar has a value, and every required relation a name. */
 export function checkRequiredFields(facts: FactImport[]): PreflightFinding[] {
   const findings: PreflightFinding[] = [];
   for (const { collection, rows } of facts) {
     const src = factSource(collection);
     const required = factSpec(collection).scalars.filter((s) => s.required);
+    const requiredRelations = factSpec(collection).relations.filter((r) => r.required);
     for (const row of rows) {
+      for (const relation of requiredRelations) {
+        const ref = row.relations.find((r) => r.attr === relation.attr);
+        if (ref?.en === undefined && ref?.de === undefined) {
+          const column = relationColumn(src, relation.attr, 'en');
+          findings.push({
+            check: 5,
+            level: 'error',
+            sheet: src.sheet,
+            row: row.rowNumber,
+            field: column,
+            message: `Sheet \`${src.sheet}\` row ${row.rowNumber}: required field \`${column}\` is empty`,
+          });
+        }
+      }
       for (const field of required) {
         if (row.scalars.en[field.attr] === undefined) {
           const column = scalarColumn(src, field.attr);

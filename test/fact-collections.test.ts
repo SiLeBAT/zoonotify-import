@@ -2,9 +2,15 @@ import { describe, it, expect } from 'vitest';
 import { FACT_COLLECTIONS, factSpec } from '../src/core/fact-collections.js';
 
 describe('FACT_COLLECTIONS registry', () => {
-  it('registers exactly the three fact collections', () => {
+  it('registers exactly the fact collections', () => {
     const names = FACT_COLLECTIONS.map((s) => s.collection).sort();
-    expect(names).toEqual(['multi-resistance', 'prevalence', 'resistance']);
+    expect(names).toEqual([
+      'esbl-ampc-gene-result',
+      'multi-resistance',
+      'prevalence',
+      'resistance',
+      'typing-result',
+    ]);
   });
 
   it('resistance declares its 9 relations against the right reference collections', () => {

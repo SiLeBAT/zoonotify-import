@@ -12,12 +12,12 @@ import {
 } from './fixtures/valid-3sheet.js';
 
 describe('runPreflight — 4-sheet contract', () => {
-  it('passes a valid workbook: no errors, thirteen collections, parsed-row summary', async () => {
+  it('passes a valid workbook: no errors, every collection, parsed-row summary', async () => {
     const report = await runPreflight(validWorkbook());
 
     expect(report.ok).toBe(true);
     expect(report.errors).toEqual([]);
-    expect(report.summary.collections).toBe(13);
+    expect(report.summary.collections).toBe(19);
     expect(report.summary.rowsByCollection.resistance).toBe(1);
     expect(report.summary.totalRows).toBeGreaterThan(0);
   });

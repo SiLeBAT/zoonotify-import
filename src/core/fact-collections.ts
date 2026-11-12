@@ -19,7 +19,7 @@
  * See docs/import-cli-spec/source-xlsx-format.md §4.2.
  */
 
-export type ScalarType = 'string' | 'integer' | 'float';
+export type ScalarType = 'string' | 'integer' | 'float' | 'date';
 
 export interface FactScalarField {
   attr: string;
@@ -37,6 +37,8 @@ export interface FactRelationField {
   attr: string;
   /** Reference collection whose `(locale, name) → id` map resolves this relation. */
   collection: string;
+  /** Whether every row must name a target (pre-flight check #5). */
+  required?: boolean;
 }
 
 export interface FactCollectionSpec {
@@ -57,7 +59,37 @@ export interface FactCollectionSpec {
 
 const ZOMO: FactScalarField = { attr: 'zomoProgram', paired: true, type: 'string' };
 
+/** `Datum der Datenextraktion`, carried by every fact sheet since zn1934. */
+const EXTRACTION_DATE: FactScalarField = {
+  attr: 'dataExtractionDate',
+  paired: false,
+  type: 'date',
+  required: true,
+};
+
 /** A multi-resistance Combination in one sampling year: one bar of the graph (ADR 0008). */
+/** The Combination relations of the zn1934 fact collections (no `specie`). */
+const COMBINATION: FactRelationField[] = [
+  { attr: 'matrix', collection: 'matrix' },
+  { attr: 'matrixGroup', collection: 'matrix-group' },
+  { attr: 'microorganism', collection: 'microorganism' },
+  { attr: 'sampleType', collection: 'sample-type' },
+  { attr: 'sampleOrigin', collection: 'sample-origin' },
+  { attr: 'superCategorySampleOrigin', collection: 'super-category-sample-origin' },
+  { attr: 'samplingStage', collection: 'sampling-stage' },
+  { attr: 'matrixDetail', collection: 'matrix-detail' },
+];
+
+/** A zn1934 Combination in one sampling year (no `specie`: those sheets have none). */
+const COMBINATION_SAMPLE_YEAR = [
+  'microorganism',
+  'matrix',
+  'matrixDetail',
+  'sampleOrigin',
+  'samplingStage',
+  'samplingYear',
+];
+
 const COMBINATION_YEAR = [
   'microorganism',
   'specie',
@@ -80,6 +112,7 @@ export const FACT_COLLECTIONS: FactCollectionSpec[] = [
       { attr: 'resistenzrate', paired: false, type: 'float', required: true },
       { attr: 'minKonfidenzintervall', paired: false, type: 'float', required: true },
       { attr: 'maxKonfidenzintervall', paired: false, type: 'float', required: true },
+      EXTRACTION_DATE,
     ],
     relations: [
       { attr: 'matrix', collection: 'matrix' },
@@ -103,6 +136,7 @@ export const FACT_COLLECTIONS: FactCollectionSpec[] = [
       { attr: 'percentageOfPositive', paired: false, type: 'float' },
       { attr: 'ciMin', paired: false, type: 'float' },
       { attr: 'ciMax', paired: false, type: 'float' },
+      EXTRACTION_DATE,
     ],
     relations: [
       { attr: 'matrix', collection: 'matrix' },
@@ -124,6 +158,7 @@ export const FACT_COLLECTIONS: FactCollectionSpec[] = [
       { attr: 'resistanceGroup', paired: false, type: 'integer', required: true },
       { attr: 'anzahlIsolate', paired: false, type: 'integer', required: true },
       { attr: 'anzahlGetesteterIsolate', paired: false, type: 'integer', required: true },
+      EXTRACTION_DATE,
     ],
     relations: [
       { attr: 'matrix', collection: 'matrix' },
@@ -139,6 +174,57 @@ export const FACT_COLLECTIONS: FactCollectionSpec[] = [
     uniqueKey: [...COMBINATION_YEAR, 'resistanceGroup'],
     // A Combination has exactly one N; each group row counts out of it.
     consistent: [{ attr: 'anzahlGetesteterIsolate', across: COMBINATION_YEAR }],
+  },
+  {
+    collection: 'esbl-ampc-gene-result',
+    scalars: [
+      { attr: 'dbId', paired: false, type: 'string', required: true },
+      ZOMO,
+      { attr: 'samplingYear', paired: false, type: 'integer', required: true },
+      { attr: 'numberOfIsolates', paired: false, type: 'integer', required: true },
+      { attr: 'numberOfGenes', paired: false, type: 'integer', required: true },
+      { attr: 'numberOfIsolatesWithGene', paired: false, type: 'integer', required: true },
+      { attr: 'relativeGeneAbundance', paired: false, type: 'float', required: true },
+      { attr: 'relativeGeneAbundanceCiMin', paired: false, type: 'float', required: true },
+      { attr: 'relativeGeneAbundanceCiMax', paired: false, type: 'float', required: true },
+      { attr: 'genePrevalence', paired: false, type: 'float', required: true },
+      { attr: 'genePrevalenceCiMin', paired: false, type: 'float', required: true },
+      { attr: 'genePrevalenceCiMax', paired: false, type: 'float', required: true },
+      EXTRACTION_DATE,
+    ],
+    relations: [
+      ...COMBINATION,
+      { attr: 'monitoring', collection: 'monitoring' },
+      { attr: 'esblAmpcGene', collection: 'esbl-ampc-gene' },
+    ],
+    // One row per Combination × year × monitoring × gene; `string_dbid` is not relied on.
+    uniqueKey: [...COMBINATION_SAMPLE_YEAR, 'monitoring', 'esblAmpcGene'],
+    // Each gene row counts out of the same isolates tested.
+    consistent: [{ attr: 'numberOfIsolates', across: [...COMBINATION_SAMPLE_YEAR, 'monitoring'] }],
+  },
+  {
+    collection: 'typing-result',
+    scalars: [
+      { attr: 'dbId', paired: false, type: 'string', required: true },
+      ZOMO,
+      { attr: 'samplingYear', paired: false, type: 'integer', required: true },
+      { attr: 'numberOfIsolates', paired: false, type: 'integer', required: true },
+      { attr: 'numberOfIsolatesInSubgroup', paired: false, type: 'integer', required: true },
+      { attr: 'subgroupPrevalence', paired: false, type: 'float', required: true },
+      { attr: 'subgroupPrevalenceCiMin', paired: false, type: 'float', required: true },
+      { attr: 'subgroupPrevalenceCiMax', paired: false, type: 'float', required: true },
+      EXTRACTION_DATE,
+    ],
+    relations: [
+      ...COMBINATION,
+      { attr: 'typing', collection: 'typing' },
+      // A typing result without its subgroup says nothing; such rows are a steward fix.
+      { attr: 'typingSubgroup', collection: 'typing-subgroup', required: true },
+    ],
+    // One row per Combination × year × typing method × subgroup.
+    uniqueKey: [...COMBINATION_SAMPLE_YEAR, 'typing', 'typingSubgroup'],
+    // Each subgroup row counts out of the same isolates typed.
+    consistent: [{ attr: 'numberOfIsolates', across: [...COMBINATION_SAMPLE_YEAR, 'typing'] }],
   },
 ];
 
