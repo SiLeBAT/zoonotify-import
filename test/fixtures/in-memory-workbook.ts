@@ -3,7 +3,7 @@ import ExcelJS from 'exceljs';
 export interface SheetSpec {
   name: string;
   columns: string[];
-  rows?: (string | number | null)[][];
+  rows?: (string | number | Date | null)[][];
 }
 
 /**

@@ -1,18 +1,26 @@
 import ExcelJS from 'exceljs';
-import { MASTERDATA, AMR, PREV, MULTIRES, type Cells } from '../fixtures/valid-3sheet.js';
+import {
+  MASTERDATA,
+  AMR,
+  PREV,
+  MULTIRES,
+  ESBL,
+  TYPING,
+  type Cells,
+} from '../fixtures/valid-3sheet.js';
 
 /**
- * Integration fixture for the 4-sheet contract (ADR 0007, ADR 0008). The source
- * workbook has exactly four sheets — `masterdata`, `amr_resrate`, `prevalence`,
- * `multires` — and the importer's normalizer derives the 13 Strapi collections. The
+ * Integration fixture for the 6-sheet contract (ADR 0007, ADR 0008, ADR 0010). The
+ * source workbook has six sheets — `masterdata`, `amr_resrate`, `prevalence`,
+ * `multires`, `ESBL_AmpC_genes`, `typing` — and the importer's normalizer derives the
+ * 19 Strapi collections. The
  * EXPECTED/EXPECTED_FACTS tables below describe the post-import DB state the
  * integration test asserts through the content-manager API.
  *
  * Under this contract every i18n row carries both locales (both mandatory, so
  * `enCount === deCount`), and `iri` is deprecated (no iri columns, none persisted).
- * `matrix-detail` is non-i18n and harvested from the fact sheets' `Matrixdetail`
- * column; a `?locale=de` query on a non-localized type returns the same rows, so
- * its `deCount` equals its `enCount`.
+ * `matrix-detail` and `esbl-ampc-gene` are non-i18n; a `?locale=de` query on a
+ * non-localized type returns the same rows, so their `deCount` equals `enCount`.
  */
 
 export interface ExpectedCollection {
@@ -48,6 +56,13 @@ const MASTERDATA_VALUES: Record<string, string[]> = {
   Species: ['Gallus gallus'],
   Antimiktobielle_Subtanz: ['Ampicillin'],
   Antimicrobial_substance: ['Ampicillin'],
+  ESBL_AmpC_genes: ['CTX-M-1', 'SHV-12'],
+  Monitoring_DE: ['selektiv'],
+  Monitoring_EN: ['selective'],
+  Typing_DE: ['Salmonella Serovare'],
+  Typing_EN: ['Salmonella serovars'],
+  Typing_subgroup_DE: ['S. Infantis'],
+  Typing_subgroup_EN: ['S. Infantis'],
 };
 
 /** One amr_resrate row whose every relation resolves against masterdata, both locales. */
@@ -81,6 +96,7 @@ const AMR_ROW: Cells = {
   'Min. 95% Konfidenzintervall': 1.6,
   'Max. 95% Konfidenzintervall': 11.3,
   string_dbid: 'R-2024-001',
+  'Datum der Datenextraktion': '2025-05-23',
 };
 
 /** One prevalence row; its `Matrixdetail` differs from amr so matrix-detail unions to two. */
@@ -112,6 +128,8 @@ const PREV_ROW: Cells = {
   max_95_KI: 16.5,
   Gruppe: 'g',
   Produktionsrichtung: 'pr',
+  // The steward's prevalence sheet stores this column as real Excel dates.
+  'Datum der Datenextraktion': new Date(Date.UTC(2020, 11, 3)),
 };
 
 /** One multires row; it reuses amr's `Matrixdetail`, so matrix-detail stays at two. */
@@ -122,6 +140,44 @@ const MULTIRES_ROW: Cells = {
   multires_group_en: '> 4 x resistant',
   no_res_isolates: 7,
   total_isol: 100,
+};
+
+/** The Combination columns the zn1934 sheets share with amr (no `Spezies`), from amr's row. */
+function combinationOf(columns: string[]): Cells {
+  return Object.fromEntries(columns.filter((c) => c in AMR_ROW).map((c) => [c, AMR_ROW[c]!]));
+}
+
+/** One ESBL_AmpC_genes row; it reuses amr's `Matrixdetail`, so matrix-detail stays at two. */
+const ESBL_ROW: Cells = {
+  ...combinationOf(ESBL.columns),
+  Monitoring_DE: 'selektiv',
+  Monitoring_EN: 'selective',
+  ESBL_AmpC_genes: 'CTX-M-1',
+  total_no_isolates: 8,
+  total_no_genes: 8,
+  no_isolates_with_ESBL_AmpC_gene: 3,
+  relative_gene_abundance: 37.5,
+  relative_gene_abundance_min_95_CI: 13.5,
+  relative_gene_abundance_max_95_CI: 69.6,
+  gene_prevalence: 37.5,
+  gene_prevalence_min_95_CI: 13.5,
+  gene_prevalence_max_95_CI: 69.6,
+  string_dbid: 'ZP_2024_Salmonella_Farm_CTX_M_1',
+};
+
+/** One typing row; it reuses amr's `Matrixdetail`, so matrix-detail stays at two. */
+const TYPING_ROW: Cells = {
+  ...combinationOf(TYPING.columns),
+  Typing_DE: 'Salmonella Serovare',
+  Typing_EN: 'Salmonella serovars',
+  Typing_subgroup_DE: 'S. Infantis',
+  Typing_subgroup_EN: 'S. Infantis',
+  total_no_isolates: 18,
+  no_isolates_per_subgroup: 4,
+  subgroup_prevalence: 22.2,
+  subgroup_prevalence_min_95_CI: 6.4,
+  subgroup_prevalence_max_95_CI: 47.6,
+  string_dbid: 'ZP_2024_Salmonella_Farm_S._Infantis',
 };
 
 /**
@@ -139,6 +195,10 @@ export const EXPECTED: ExpectedCollection[] = [
   { collection: 'sample-type', enCount: 1, deCount: 1 },
   { collection: 'specie', enCount: 1, deCount: 1 },
   { collection: 'antimicrobial-substance', enCount: 1, deCount: 1 },
+  { collection: 'monitoring', enCount: 1, deCount: 1 },
+  { collection: 'typing', enCount: 1, deCount: 1 },
+  { collection: 'typing-subgroup', enCount: 1, deCount: 1 },
+  { collection: 'esbl-ampc-gene', enCount: 2, deCount: 2 },
   { collection: 'matrix-detail', enCount: 2, deCount: 2 },
 ];
 
@@ -146,6 +206,8 @@ export const EXPECTED_FACTS: ExpectedFact[] = [
   { collection: 'resistance', enCount: 1, deCount: 1 },
   { collection: 'prevalence', enCount: 1, deCount: 1 },
   { collection: 'multi-resistance', enCount: 1, deCount: 1 },
+  { collection: 'esbl-ampc-gene-result', enCount: 1, deCount: 1 },
+  { collection: 'typing-result', enCount: 1, deCount: 1 },
 ];
 
 /** Builds the masterdata sheet's data rows from the column-parallel value lists. */
@@ -159,11 +221,11 @@ function masterdataRows(): (string | null)[][] {
 }
 
 /** Maps a fact row record to a cell array in the sheet's column order. */
-function factRow(columns: string[], record: Cells): (string | number | null)[] {
+function factRow(columns: string[], record: Cells): (string | number | Date | null)[] {
   return columns.map((c) => record[c] ?? null);
 }
 
-/** Writes the 4-sheet fixture workbook (`masterdata` + `amr_resrate` + `prevalence` + `multires`). */
+/** Writes the 6-sheet fixture workbook (masterdata + the five fact sheets). */
 export async function writeFixtureWorkbook(filePath: string): Promise<void> {
   const workbook = new ExcelJS.Workbook();
 
@@ -184,6 +246,14 @@ export async function writeFixtureWorkbook(filePath: string): Promise<void> {
   const multires = workbook.addWorksheet('multires');
   multires.addRow(MULTIRES.columns);
   multires.addRow(factRow(MULTIRES.columns, MULTIRES_ROW));
+
+  const esbl = workbook.addWorksheet('ESBL_AmpC_genes');
+  esbl.addRow(ESBL.columns);
+  esbl.addRow(factRow(ESBL.columns, ESBL_ROW));
+
+  const typing = workbook.addWorksheet('typing');
+  typing.addRow(TYPING.columns);
+  typing.addRow(factRow(TYPING.columns, TYPING_ROW));
 
   await workbook.xlsx.writeFile(filePath);
 }

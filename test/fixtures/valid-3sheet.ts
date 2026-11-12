@@ -8,7 +8,7 @@ import { buildWorkbook, type SheetSpec } from './in-memory-workbook.js';
  * drive one pre-flight check; the CLI tests use `validWorkbook()` as the file
  * `readWorkbook` returns so pre-flight passes.
  */
-export type Cells = Record<string, string | number>;
+export type Cells = Record<string, string | number | Date>;
 export interface SheetDef {
   name: string;
   columns: string[];
@@ -36,6 +36,13 @@ export const MASTERDATA: SheetDef = {
     'Species',
     'Antimiktobielle_Subtanz',
     'Antimicrobial_substance',
+    'ESBL_AmpC_genes',
+    'Monitoring_DE',
+    'Monitoring_EN',
+    'Typing_DE',
+    'Typing_EN',
+    'Typing_subgroup_DE',
+    'Typing_subgroup_EN',
   ],
   row: {
     Oberkategorie_Probenursprung: 'Huhn',
@@ -56,6 +63,13 @@ export const MASTERDATA: SheetDef = {
     Species: 'C. coli',
     Antimiktobielle_Subtanz: 'AMP',
     Antimicrobial_substance: 'AMP',
+    ESBL_AmpC_genes: 'CTX-M-1',
+    Monitoring_DE: 'selektiv',
+    Monitoring_EN: 'selective',
+    Typing_DE: 'Salmonella Serovare',
+    Typing_EN: 'Salmonella serovars',
+    Typing_subgroup_DE: 'S. Typhimurium monophasisch',
+    Typing_subgroup_EN: 'S. Typhimurium monophasic',
   },
 };
 
@@ -91,6 +105,7 @@ export const AMR: SheetDef = {
     'Min. 95% Konfidenzintervall',
     'Max. 95% Konfidenzintervall',
     'string_dbid',
+    'Datum der Datenextraktion',
   ],
   row: {
     'ZoMo-Programm': 'EH2',
@@ -122,6 +137,7 @@ export const AMR: SheetDef = {
     'Min. 95% Konfidenzintervall': 5,
     'Max. 95% Konfidenzintervall': 20,
     string_dbid: 'R-1',
+    'Datum der Datenextraktion': '2025-05-23',
   },
 };
 
@@ -153,6 +169,7 @@ export const PREV: SheetDef = {
     'prevalence',
     'min_95_KI',
     'max_95_KI',
+    'Datum der Datenextraktion',
     'Gruppe',
     'Produktionsrichtung',
   ],
@@ -184,6 +201,7 @@ export const PREV: SheetDef = {
     max_95_KI: 12.9,
     Gruppe: 'g',
     Produktionsrichtung: 'pr',
+    'Datum der Datenextraktion': new Date(Date.UTC(2020, 11, 3)),
   },
 };
 
@@ -221,6 +239,7 @@ export const MULTIRES: SheetDef = {
     'multires_group_en',
     'no_res_isolates',
     'total_isol',
+    'Datum der Datenextraktion',
   ],
   row: {
     'ZoMo-Programm': 'EH2',
@@ -249,6 +268,159 @@ export const MULTIRES: SheetDef = {
     multires_group_en: 'sensibel',
     no_res_isolates: 4,
     total_isol: 10,
+    'Datum der Datenextraktion': '2025-05-23',
+  },
+};
+
+/**
+ * The ESBL/AmpC-gene sheet (zn1934): one row per Combination × year × monitoring
+ * × gene. Headers mirror the steward's `ESBL_AmpC_genes` sheet.
+ */
+export const ESBL: SheetDef = {
+  name: 'ESBL_AmpC_genes',
+  columns: [
+    'ZoMo-Programm',
+    'Jahr',
+    'Sampling year',
+    'Mikroorganismus',
+    'Microorganism',
+    'Probentyp',
+    'Sample type',
+    'Oberkategorie Probenursprung (Tier/Lebensmittel/Futtermittel)',
+    'Superordinate sample origin',
+    'Probenursprung (Tier/Lebensmittel/Futtermittel)',
+    'Sample origin',
+    'Probenahmestelle',
+    'Sampling stage',
+    'Matrixgruppe',
+    'Matrix group',
+    'Matrix_neu',
+    'Matrix_new',
+    'Matrixdetail',
+    'Matrix_detail_en',
+    'Weitere Details',
+    'Monitoring_DE',
+    'Monitoring_EN',
+    'ESBL_AmpC_genes',
+    'total_no_isolates',
+    'total_no_genes',
+    'no_isolates_with_ESBL_AmpC_gene',
+    'relative_gene_abundance',
+    'relative_gene_abundance_min_95_CI',
+    'relative_gene_abundance_max_95_CI',
+    'gene_prevalence',
+    'gene_prevalence_min_95_CI',
+    'gene_prevalence_max_95_CI',
+    'string_dbid',
+    'Datum der Datenextraktion',
+  ],
+  row: {
+    'ZoMo-Programm': 'EH2',
+    Jahr: 2024,
+    'Sampling year': 2024,
+    Mikroorganismus: 'Campylobacter spp.',
+    Microorganism: 'Campylobacter spp.',
+    Probentyp: 'Lebensmittel',
+    'Sample type': 'Food',
+    'Oberkategorie Probenursprung (Tier/Lebensmittel/Futtermittel)': 'Huhn',
+    'Superordinate sample origin': 'Chicken',
+    'Probenursprung (Tier/Lebensmittel/Futtermittel)': 'Masthähnchen',
+    'Sample origin': 'Broiler',
+    Probenahmestelle: 'Einzelhandel',
+    'Sampling stage': 'Retail',
+    Matrixgruppe: 'Fleisch',
+    'Matrix group': 'Meat',
+    Matrix_neu: '(Hals)haut',
+    Matrix_new: '(Neck) skin',
+    Matrixdetail: 'gekühlt',
+    Matrix_detail_en: 'gekühlt',
+    Monitoring_DE: 'selektiv',
+    Monitoring_EN: 'selective',
+    ESBL_AmpC_genes: 'CTX-M-1',
+    total_no_isolates: 8,
+    total_no_genes: 9,
+    no_isolates_with_ESBL_AmpC_gene: 3,
+    relative_gene_abundance: 33.3,
+    relative_gene_abundance_min_95_CI: 12.1,
+    relative_gene_abundance_max_95_CI: 64.6,
+    gene_prevalence: 37.5,
+    gene_prevalence_min_95_CI: 13.5,
+    gene_prevalence_max_95_CI: 69.6,
+    string_dbid: 'EH2_2024_Campylobacter_Broiler_CTX_M_1',
+    'Datum der Datenextraktion': '2025-05-23',
+  },
+};
+
+/**
+ * The typing sheet (zn1934): one row per Combination × year × typing method ×
+ * subgroup. Headers mirror the steward's `typing` sheet.
+ */
+export const TYPING: SheetDef = {
+  name: 'typing',
+  columns: [
+    'ZoMo-Programm',
+    'Jahr',
+    'Sampling year',
+    'Mikroorganismus',
+    'Microorganism',
+    'Probentyp',
+    'Sample type',
+    'Oberkategorie Probenursprung (Tier/Lebensmittel/Futtermittel)',
+    'Superordinate sample origin',
+    'Probenursprung (Tier/Lebensmittel/Futtermittel)',
+    'Sample origin',
+    'Probenahmestelle',
+    'Sampling stage',
+    'Matrixgruppe',
+    'Matrix group',
+    'Matrix_neu',
+    'Matrix_new',
+    'Matrixdetail',
+    'Matrix_detail_en',
+    'Weitere Details',
+    'Typing_DE',
+    'Typing_EN',
+    'Typing_subgroup_DE',
+    'Typing_subgroup_EN',
+    'total_no_isolates',
+    'no_isolates_per_subgroup',
+    'subgroup_prevalence',
+    'subgroup_prevalence_min_95_CI',
+    'subgroup_prevalence_max_95_CI',
+    'string_dbid',
+    'Datum der Datenextraktion',
+  ],
+  row: {
+    'ZoMo-Programm': 'EH2',
+    Jahr: 2024,
+    'Sampling year': 2024,
+    Mikroorganismus: 'Campylobacter spp.',
+    Microorganism: 'Campylobacter spp.',
+    Probentyp: 'Lebensmittel',
+    'Sample type': 'Food',
+    'Oberkategorie Probenursprung (Tier/Lebensmittel/Futtermittel)': 'Huhn',
+    'Superordinate sample origin': 'Chicken',
+    'Probenursprung (Tier/Lebensmittel/Futtermittel)': 'Masthähnchen',
+    'Sample origin': 'Broiler',
+    Probenahmestelle: 'Einzelhandel',
+    'Sampling stage': 'Retail',
+    Matrixgruppe: 'Fleisch',
+    'Matrix group': 'Meat',
+    Matrix_neu: '(Hals)haut',
+    Matrix_new: '(Neck) skin',
+    Matrixdetail: 'gekühlt',
+    Matrix_detail_en: 'gekühlt',
+    Typing_DE: 'Salmonella Serovare',
+    Typing_EN: 'Salmonella serovars',
+    Typing_subgroup_DE: 'S. Typhimurium monophasisch',
+    Typing_subgroup_EN: 'S. Typhimurium monophasic',
+    total_no_isolates: 18,
+    no_isolates_per_subgroup: 4,
+    subgroup_prevalence: 22.2,
+    subgroup_prevalence_min_95_CI: 6.4,
+    subgroup_prevalence_max_95_CI: 47.6,
+    string_dbid: 'EH2_2024_Campylobacter_Broiler_S._Typhimurium_monophasic',
+    'Datum der Datenextraktion': '2025-05-23',
   },
 };
 
@@ -265,7 +437,10 @@ export function workbookWith(...sheets: SheetSpec[]): ExcelJS.Workbook {
   return buildWorkbook(sheets);
 }
 
+/** Valid specs of the fact sheets added by zn1934, for tests that build the rest by hand. */
+export const SHEETS_ZN1934: SheetSpec[] = [spec(ESBL), spec(TYPING)];
+
 /** A workbook that passes every pre-flight check. */
 export function validWorkbook(): ExcelJS.Workbook {
-  return workbookWith(spec(MASTERDATA), spec(AMR), spec(PREV), spec(MULTIRES));
+  return workbookWith(spec(MASTERDATA), spec(AMR), spec(PREV), spec(MULTIRES), ...SHEETS_ZN1934);
 }

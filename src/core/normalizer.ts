@@ -8,12 +8,14 @@ import type {
 } from './domain.js';
 import type { CollectionImport } from './orchestrator.js';
 import type { ScalarType } from './fact-collections.js';
-import { cellValue, parseNumeric, readHeader } from './cells.js';
+import { cellValue, parseTyped, readHeader } from './cells.js';
 import {
   FACT_SOURCES,
   MASTERDATA_REFERENCES,
+  MASTERDATA_FLAT_REFERENCES,
   MATRIX_DETAIL_SOURCE,
   type FactSourceMap,
+  type MasterdataColumn,
   type MasterdataPair,
 } from './source-map.js';
 
@@ -29,16 +31,21 @@ import {
  */
 
 /**
- * Builds the ten reference-collection imports: the nine `masterdata` pairs plus
- * `matrix-detail` harvested from the fact sheets.
+ * Builds the reference-collection imports: the `masterdata` pairs, its flat
+ * single-column lists, and `matrix-detail` harvested from the fact sheets.
  */
 export function normalizeReferences(workbook: ExcelJS.Workbook): CollectionImport[] {
   const masterdata = MASTERDATA_REFERENCES.map((pair) => ({
     collection: pair.collection,
     rows: parseMasterdataPair(workbook, pair),
   }));
+  const flat = MASTERDATA_FLAT_REFERENCES.map((ref) => ({
+    collection: ref.collection,
+    rows: parseMasterdataColumn(workbook, ref),
+  }));
   return [
     ...masterdata,
+    ...flat,
     { collection: MATRIX_DETAIL_SOURCE.collection, rows: harvestMatrixDetail(workbook) },
   ];
 }
@@ -134,7 +141,7 @@ function coerce(value: string | undefined, type: ScalarType): AttrValue | undefi
   if (value === undefined) {
     return undefined;
   }
-  return type === 'string' ? value : parseNumeric(value, type);
+  return type === 'string' ? value : parseTyped(value, type);
 }
 
 /** Looks a source label up in its code table; an unknown label yields no value. */
@@ -199,6 +206,26 @@ function parseMasterdataPair(workbook: ExcelJS.Workbook, pair: MasterdataPair): 
     rows.push(
       de === undefined ? { en: { name: en ?? '' } } : { en: { name: en ?? '' }, de: { name: de } },
     );
+  }
+  return rows;
+}
+
+/** Distinct names of one single-column `masterdata` list, EN only, blank rows skipped. */
+function parseMasterdataColumn(workbook: ExcelJS.Workbook, ref: MasterdataColumn): LocalizedRow[] {
+  const sheet = workbook.getWorksheet('masterdata');
+  const col = sheet ? readHeader(sheet).get(ref.column) : undefined;
+  if (!sheet || col === undefined) {
+    return [];
+  }
+  const rows: LocalizedRow[] = [];
+  const seen = new Set<string>();
+  for (let r = 2; r <= sheet.rowCount; r++) {
+    const name = cellValue(sheet.getRow(r), col);
+    if (name === undefined || seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    rows.push({ en: { name } });
   }
   return rows;
 }

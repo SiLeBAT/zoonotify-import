@@ -3,15 +3,15 @@
 Command-line tool that bulk-loads the Zoonotify surveillance workbook into the
 [Zoonotify CMS](../zoonotify-cms) (Strapi v5) through its dedicated **Import admin API**.
 
-It reads the BfR data steward's **native 4-sheet workbook** (`masterdata` + `amr_resrate` +
-`prevalence` + `multires`), normalizes it into the 13 CMS collections, validates everything in a ten-check
+It reads the BfR data steward's **native 6-sheet workbook** (`masterdata` + `amr_resrate` +
+`prevalence` + `multires` + `ESBL_AmpC_genes` + `typing`), normalizes it into the 19 CMS collections, validates everything in a ten-check
 pre-flight, then **deletes and recreates** those collections with batching, retry, and a circuit
 breaker — writing a machine-readable result file you can inspect or branch on.
 
 > **The import is destructive.** It is delete-then-recreate, not an upsert, and is **not**
 > transactional across collections. Always take a database snapshot before a production run.
 
-The input contract is the **4-sheet format** (ADR 0007, extended by ADR 0008). The full column-by-column spec lives in
+The input contract is the **6-sheet format** (ADR 0007, extended by ADR 0008 and ADR 0010). The full column-by-column spec lives in
 [`source-xlsx-format.md`](../docs/import-cli-spec/source-xlsx-format.md) — give that to whoever
 produces the workbook.
 
@@ -19,15 +19,17 @@ produces the workbook.
 
 ## What it imports
 
-From **4 source sheets**, the importer derives **13 collections**:
+From **6 source sheets**, the importer derives **19 collections**:
 
-| Source sheet    | Produces                                                                                                                                                                                   |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `masterdata`    | 9 reference collections (`matrix`, `matrix-group`, `microorganism`, `specie`, `antimicrobial-substance`, `sample-type`, `sample-origin`, `super-category-sample-origin`, `sampling-stage`) |
-| `amr_resrate`   | the `resistance` fact collection                                                                                                                                                           |
-| `prevalence`    | the `prevalence` fact collection                                                                                                                                                           |
-| `multires`      | the `multi-resistance` fact collection                                                                                                                                                     |
-| all fact sheets | the `matrix-detail` reference collection (harvested from their inline `Matrixdetail` column)                                                                                               |
+| Source sheet      | Produces                                                                                                                                                                                                                                                 |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `masterdata`      | 13 reference collections (`matrix`, `matrix-group`, `microorganism`, `specie`, `antimicrobial-substance`, `sample-type`, `sample-origin`, `super-category-sample-origin`, `sampling-stage`, `monitoring`, `typing`, `typing-subgroup`, `esbl-ampc-gene`) |
+| `amr_resrate`     | the `resistance` fact collection                                                                                                                                                                                                                         |
+| `prevalence`      | the `prevalence` fact collection                                                                                                                                                                                                                         |
+| `multires`        | the `multi-resistance` fact collection                                                                                                                                                                                                                   |
+| `ESBL_AmpC_genes` | the `esbl-ampc-gene-result` fact collection                                                                                                                                                                                                              |
+| `typing`          | the `typing-result` fact collection                                                                                                                                                                                                                      |
+| all fact sheets   | the `matrix-detail` reference collection (harvested from their inline `Matrixdetail` column)                                                                                                                                                             |
 
 Out of scope (loaded by the legacy CMS bootstrap mechanism): `resistance-table` ("cut-off"),
 `controlled-vocabulary`, `salmonella`. See [ADR 0006].
@@ -52,8 +54,8 @@ You need all of these before the importer can do anything useful:
    message starts `Not the Import token:` and names the mismatch (type, name, or the missing and
    extra grants), so fix the token in the admin panel and re-run. How to create it:
    [CMS README](../zoonotify-cms/README.md#post-deploy-operator-step--generate-the-import-api-token).
-   Treat the token as a secret — anyone holding it can wipe and refill the 13 collections.
-4. **The source workbook** in the 4-sheet format (see
+   Treat the token as a secret — anyone holding it can wipe and refill the 19 collections.
+4. **The source workbook** in the 6-sheet format (see
    [`source-xlsx-format.md`](../docs/import-cli-spec/source-xlsx-format.md)). Run `--dry-run` first
    to confirm it conforms.
 
@@ -260,7 +262,7 @@ a given run.
 
 - **Exit 1, "Missing STRAPI_URL or STRAPI_TOKEN"** — copy `.env.example` to `.env` and fill it in.
 - **Exit 1, "insecure http://"** — use an `https://` URL, or `--insecure` for local dev only.
-- **Exit 2, check #2/#3 (missing sheet/column)** — the workbook isn't in the 4-sheet format. It
+- **Exit 2, check #2/#3 (missing sheet/column)** — the workbook isn't in the 6-sheet format. It
   must have exactly `masterdata`, `amr_resrate`, `prevalence`, `multires` with the columns in
   [`source-xlsx-format.md`](../docs/import-cli-spec/source-xlsx-format.md).
 - **Exit 2, check #6 on `multires`** — two rows for the same Combination × year × Resistance
