@@ -63,7 +63,7 @@ describe.runIf(ENABLED)('full workbook import against a live CMS', () => {
         },
       },
     );
-    expect(stdout).toMatch(/Done: 10 reference collections, 3 fact collections/);
+    expect(stdout).toMatch(/Done: 14 reference collections, 5 fact collections/);
     // A failed record-import only warns (exit 0), so assert it went through:
     // the strict policy must accept the token for all three import-admin calls.
     expect(String(stderr)).not.toMatch(/recording its date .* failed/);
@@ -146,7 +146,7 @@ describe.runIf(ENABLED)('full workbook import against a live CMS', () => {
         env: { ...process.env, STRAPI_URL: `${ADMIN_BASE}/api`, STRAPI_TOKEN: token },
       },
     );
-    expect(stdout).toMatch(/Done: 10 reference collections, 3 fact collections/);
+    expect(stdout).toMatch(/Done: 14 reference collections, 5 fact collections/);
 
     for (const spec of EXPECTED) {
       const en = await listCollection(ADMIN_BASE, jwt, spec.collection, 'en');
